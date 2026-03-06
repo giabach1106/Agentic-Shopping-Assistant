@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+python-jose[cryptography]
+requests
+python-dotenv
+sqlalchemy>=2.0
+alembic
+psycopg2-binary
