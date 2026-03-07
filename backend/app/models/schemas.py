@@ -35,10 +35,20 @@ class SessionSnapshotResponse(BaseModel):
     checkpoint_state: dict[str, Any] | None = Field(alias="checkpointState")
 
 
+class RecommendationResponse(BaseModel):
+    session_id: str = Field(alias="sessionId")
+    verdict: str
+    trust_score: float = Field(alias="trustScore")
+    confidence: float
+    selected_candidate: dict[str, Any] | None = Field(alias="selectedCandidate")
+    top_reasons: list[str] = Field(alias="topReasons")
+    risk_flags: list[str] = Field(alias="riskFlags")
+    score_breakdown: dict[str, Any] = Field(alias="scoreBreakdown")
+
+
 class HealthResponse(BaseModel):
     status: str
     app: str
     checkpoint_backend: str = Field(alias="checkpointBackend")
     default_model: str = Field(alias="defaultModel")
     fallback_model: str = Field(alias="fallbackModel")
-

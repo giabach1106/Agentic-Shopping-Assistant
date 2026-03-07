@@ -8,6 +8,7 @@ from app.models.schemas import (
     ChatResponse,
     CreateSessionResponse,
     HealthResponse,
+    RecommendationResponse,
     SessionSnapshotResponse,
 )
 
@@ -84,3 +85,38 @@ async def get_session(request: Request, session_id: str) -> SessionSnapshotRespo
             detail=f"Session '{session_id}' was not found.",
         )
     return SessionSnapshotResponse(**snapshot)
+
+
+@router.get(
+    "/v1/recommendations/{session_id}",
+    response_model=RecommendationResponse,
+)
+async def get_recommendation(
+    request: Request,
+    session_id: str,
+) -> RecommendationResponse:
+    services = _services(request)
+    checkpoint = await services.session_service.get_checkpoint_state(session_id)
+    if checkpoint is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No recommendation state found for session '{session_id}'.",
+        )
+
+    decision = (checkpoint.get("agent_outputs") or {}).get("decision")
+    if not decision:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Decision output is not available for session '{session_id}' yet.",
+        )
+
+    return RecommendationResponse(
+        sessionId=session_id,
+        verdict=decision["verdict"],
+        trustScore=decision["trustScore"],
+        confidence=decision["confidence"],
+        selectedCandidate=decision.get("selectedCandidate"),
+        topReasons=decision.get("topReasons", []),
+        riskFlags=decision.get("riskFlags", []),
+        scoreBreakdown=decision.get("scoreBreakdown", {}),
+    )
