@@ -74,6 +74,7 @@ pytest -q
 - `GET /v1/sessions/{session_id}`: full snapshot + checkpoint state
 - `GET /v1/recommendations/{session_id}`: latest decision payload for UI consumption
 - `GET /v1/metrics/runtime`: runtime telemetry (calls, fallback count, latency, estimated cost)
+- `POST /v1/voice/consult`: optional Sonic-style consultation (text-simulated voice response)
 
 ### Demo utilities
 

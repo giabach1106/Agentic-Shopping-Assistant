@@ -67,3 +67,15 @@ class RuntimeMetricsResponse(BaseModel):
     total_estimated_cost_usd: float = Field(alias="totalEstimatedCostUsd")
     tasks: dict[str, Any]
     sessions_tracked: int = Field(alias="sessionsTracked")
+
+
+class VoiceConsultRequest(BaseModel):
+    session_id: str = Field(alias="sessionId")
+    question: str = Field(min_length=1, max_length=2_000)
+
+
+class VoiceConsultResponse(BaseModel):
+    session_id: str = Field(alias="sessionId")
+    answer: str
+    mode: str
+    model_meta: dict[str, Any] = Field(alias="modelMeta")

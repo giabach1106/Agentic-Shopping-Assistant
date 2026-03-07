@@ -12,6 +12,8 @@ from app.models.schemas import (
     RuntimeMetricsResponse,
     ResumeRunRequest,
     SessionSnapshotResponse,
+    VoiceConsultRequest,
+    VoiceConsultResponse,
 )
 
 router = APIRouter()
@@ -177,4 +179,62 @@ async def get_recommendation(
         topReasons=decision.get("topReasons", []),
         riskFlags=decision.get("riskFlags", []),
         scoreBreakdown=decision.get("scoreBreakdown", {}),
+    )
+
+
+@router.post("/v1/voice/consult", response_model=VoiceConsultResponse)
+async def voice_consult(
+    request: Request,
+    payload: VoiceConsultRequest,
+) -> VoiceConsultResponse:
+    services = _services(request)
+    exists = await services.session_service.require_session(payload.session_id)
+    if not exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session '{payload.session_id}' was not found.",
+        )
+
+    checkpoint = await services.session_service.get_checkpoint_state(payload.session_id)
+    if checkpoint is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No checkpoint state found for session '{payload.session_id}'.",
+        )
+
+    decision = (checkpoint.get("agent_outputs") or {}).get("decision")
+    if decision is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Decision output is not available for session '{payload.session_id}'.",
+        )
+
+    model_result = await services.model_router.call(
+        task_type="voice_consultation",
+        payload={
+            "prompt": (
+                "You are a concise shopping consultant. "
+                f"Question: {payload.question}. "
+                f"Current recommendation: verdict={decision.get('verdict')}, "
+                f"trustScore={decision.get('trustScore')}, "
+                f"topReasons={decision.get('topReasons')}, "
+                f"riskFlags={decision.get('riskFlags')}."
+            )
+        },
+        session_id=payload.session_id,
+    )
+
+    answer = (
+        f"[VoiceConsult] Verdict {decision.get('verdict')} "
+        f"(Trust {decision.get('trustScore')}): {model_result.output.get('text')}"
+    )
+    return VoiceConsultResponse(
+        sessionId=payload.session_id,
+        answer=answer,
+        mode="text-simulated-voice",
+        modelMeta={
+            "modelId": model_result.model_id,
+            "fallbackUsed": model_result.fallback_used,
+            "fallbackReason": model_result.fallback_reason,
+        },
     )
