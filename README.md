@@ -69,3 +69,9 @@ pytest -q
 - `POST /v1/runs/{session_id}/resume`: resume from checkpoint (requires `message` if follow-up is pending)
 - `GET /v1/sessions/{session_id}`: full snapshot + checkpoint state
 - `GET /v1/recommendations/{session_id}`: latest decision payload for UI consumption
+
+### Demo utilities
+
+- Guided walkthrough: `python backend/scripts/demo_walkthrough.py`
+- Demo runbook: [`docs/demo_runbook.md`](docs/demo_runbook.md)
+- Submission checklist: [`docs/submission_checklist.md`](docs/submission_checklist.md)
