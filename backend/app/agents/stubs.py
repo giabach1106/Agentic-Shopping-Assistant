@@ -6,6 +6,7 @@ from typing import Any
 from app.core.model_router import ModelRouter
 from app.models.planner import SearchConstraints
 from app.rag.providers import HybridRAGService
+from app.services.review_analysis import ReviewEvidenceAnalyzer
 from app.services.trust_scoring import TrustScoringEngine
 
 
@@ -164,12 +165,17 @@ class ReviewIntelligenceAgent:
     def __init__(self, model_router: ModelRouter, rag_service: HybridRAGService) -> None:
         self._model_router = model_router
         self._rag_service = rag_service
+        self._evidence_analyzer = ReviewEvidenceAnalyzer()
 
     async def run(self, constraints: dict[str, Any]) -> dict[str, Any]:
         retrieval = await self._rag_service.retrieve_review_context(constraints)
         documents = retrieval["documents"]
-        evidence_refs = [doc.doc_id for doc in documents]
         source_stats = retrieval["sourceStats"]
+        analysis = self._evidence_analyzer.analyze(documents)
+        ranked_evidence = analysis["rankedEvidence"]
+        evidence_refs = [item.doc_id for item in ranked_evidence]
+        promo_likelihood = float(analysis["paidPromoLikelihood"])
+        evidence_quality = float(analysis["averageQuality"])
 
         llm_result = await self._model_router.call(
             task_type="review_intelligence",
@@ -182,10 +188,20 @@ class ReviewIntelligenceAgent:
         )
 
         pros = ["Comfortable for long study sessions", "Good value for price"]
+        if any("warranty" in item.excerpt.lower() for item in ranked_evidence):
+            pros.append("Community feedback includes practical durability checks.")
+
         cons = ["Assembly time can be long", "Armrest durability varies"]
-        risk_flags = ["Some reviews mention paid promotion disclaimers"]
+        if any("wobble" in item.excerpt.lower() for item in ranked_evidence):
+            cons.append("Lower-end variants may wobble after long-term use.")
+
+        risk_flags = []
         if "tiktok" in source_stats:
             risk_flags.append("Contains creator-sourced opinions; verify sponsorship tags.")
+        if promo_likelihood >= 0.5:
+            risk_flags.append("High affiliate/sponsored signal ratio in retrieved evidence.")
+        if analysis["duplicateClusters"]:
+            risk_flags.append("Duplicate review narratives detected across sources.")
         if len(evidence_refs) == 0:
             risk_flags.append("Low evidence coverage across sources.")
 
@@ -193,10 +209,22 @@ class ReviewIntelligenceAgent:
             "pros": pros,
             "cons": cons,
             "riskFlags": risk_flags,
-            "paidPromoLikelihood": 0.28,
-            "confidence": 0.77,
+            "paidPromoLikelihood": promo_likelihood,
+            "confidence": round((0.5 * evidence_quality) + (0.5 * (1 - promo_likelihood)), 2),
             "sourceStats": source_stats,
             "evidenceRefs": evidence_refs,
+            "evidenceQualityScore": evidence_quality,
+            "duplicateReviewClusters": analysis["duplicateClusters"],
+            "rankedEvidence": [
+                {
+                    "docId": item.doc_id,
+                    "source": item.source,
+                    "qualityScore": item.quality_score,
+                    "promoSignals": item.promo_signals,
+                    "excerpt": item.excerpt,
+                }
+                for item in ranked_evidence
+            ],
             "modelMeta": {
                 "modelId": llm_result.model_id,
                 "fallbackUsed": llm_result.fallback_used,

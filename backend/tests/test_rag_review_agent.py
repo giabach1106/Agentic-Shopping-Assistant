@@ -45,8 +45,12 @@ def test_review_agent_returns_evidence_refs_from_rag() -> None:
         )
         assert len(output["evidenceRefs"]) > 0
         assert isinstance(output["sourceStats"], dict)
+        assert "evidenceQualityScore" in output
+        assert "duplicateReviewClusters" in output
+        assert "rankedEvidence" in output
+        assert output["confidence"] <= 1
+        assert output["confidence"] >= 0
         assert "pros" in output
         assert "cons" in output
 
     asyncio.run(run_test())
-

@@ -106,6 +106,7 @@ class TrustScoringEngine:
         self, review: dict[str, Any]
     ) -> tuple[float, list[str], list[str]]:
         confidence = float(review.get("confidence", 0.5))
+        evidence_quality_score = float(review.get("evidenceQualityScore", confidence))
         paid_promo_likelihood = float(review.get("paidPromoLikelihood", 0.0))
         evidence_count = len(review.get("evidenceRefs", []))
         source_diversity = len((review.get("sourceStats") or {}).keys())
@@ -114,12 +115,18 @@ class TrustScoringEngine:
         evidence_factor = _clamp(evidence_count / 4.0)
         diversity_factor = _clamp(source_diversity / 3.0)
 
-        base = (0.45 * confidence) + (0.3 * evidence_factor) + (0.25 * diversity_factor)
+        base = (
+            (0.3 * confidence)
+            + (0.3 * evidence_quality_score)
+            + (0.2 * evidence_factor)
+            + (0.2 * diversity_factor)
+        )
         penalty = (0.25 * paid_promo_likelihood) + min(0.2, risk_count * 0.04)
         score = _clamp(base - penalty)
 
         notes = [
             f"Review evidence coverage: {evidence_count} references across {source_diversity} sources.",
+            f"Evidence quality score: {round(evidence_quality_score, 2)}.",
             f"Estimated paid-promotion likelihood: {round(paid_promo_likelihood, 2)}.",
         ]
         risks: list[str] = []
@@ -322,4 +329,3 @@ class TrustScoringEngine:
         ]
         ranked = sorted(components, key=lambda item: item[1], reverse=True)
         return [item[0] for item in ranked[:3]]
-
