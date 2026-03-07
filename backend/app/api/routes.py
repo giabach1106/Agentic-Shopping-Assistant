@@ -9,6 +9,7 @@ from app.models.schemas import (
     CreateSessionResponse,
     HealthResponse,
     RecommendationResponse,
+    ResumeRunRequest,
     SessionSnapshotResponse,
 )
 
@@ -70,6 +71,55 @@ async def chat(request: Request, payload: ChatRequest) -> ChatResponse:
 
     return ChatResponse(
         sessionId=payload.session_id,
+        reply=orchestration.reply,
+        state=orchestration.state,
+    )
+
+
+@router.post("/v1/runs/{session_id}/resume", response_model=ChatResponse)
+async def resume_run(
+    request: Request,
+    session_id: str,
+    payload: ResumeRunRequest,
+) -> ChatResponse:
+    services = _services(request)
+    exists = await services.session_service.require_session(session_id)
+    if not exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session '{session_id}' was not found.",
+        )
+
+    previous_checkpoint = await services.session_service.get_checkpoint_state(session_id)
+    if previous_checkpoint is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No checkpoint state found for session '{session_id}'.",
+        )
+
+    if previous_checkpoint.get("needs_follow_up") and not payload.message:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "This run is waiting for follow-up input. "
+                "Provide message in request body to resume."
+            ),
+        )
+
+    user_message = payload.message or "continue with existing constraints"
+    await services.session_service.add_user_message(session_id, user_message)
+    history = await services.session_service.get_history(session_id)
+    orchestration = await services.orchestrator.run_turn(
+        session_id=session_id,
+        user_message=user_message,
+        history=history,
+        previous_state=previous_checkpoint,
+    )
+    await services.session_service.add_assistant_message(session_id, orchestration.reply)
+    await services.session_service.save_state(session_id, orchestration.state)
+
+    return ChatResponse(
+        sessionId=session_id,
         reply=orchestration.reply,
         state=orchestration.state,
     )

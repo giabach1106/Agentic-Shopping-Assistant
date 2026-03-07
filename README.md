@@ -66,5 +66,6 @@ pytest -q
 
 - `POST /v1/sessions`: create session ID
 - `POST /v1/chat`: run one agent turn
+- `POST /v1/runs/{session_id}/resume`: resume from checkpoint (requires `message` if follow-up is pending)
 - `GET /v1/sessions/{session_id}`: full snapshot + checkpoint state
 - `GET /v1/recommendations/{session_id}`: latest decision payload for UI consumption

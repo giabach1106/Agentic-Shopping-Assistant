@@ -21,6 +21,13 @@ class ChatResponse(BaseModel):
     state: dict[str, Any]
 
 
+class ResumeRunRequest(BaseModel):
+    message: str | None = Field(
+        default=None,
+        description="Optional follow-up response to continue the previous run.",
+    )
+
+
 class MessageItem(BaseModel):
     role: str
     content: str
