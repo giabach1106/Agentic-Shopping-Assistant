@@ -194,12 +194,24 @@ class TrustScoringEngine:
         candidates = price_payload.get("candidates", [])
         blockers = [str(item).lower() for item in price_payload.get("blockers", [])]
         if not candidates:
+            risk_flags = ["No candidate data available for logistics scoring."]
+            if "automation_blocked" in blockers:
+                risk_flags.append(
+                    "Checkout automation blocked by anti-bot or access constraints."
+                )
             return {
                 "price_fairness": 0.5,
                 "delivery_safety": 0.5,
                 "return_safety": 0.5,
-                "notes": ["No candidate data available from price/logistics agent."],
-                "risk_flags": ["No candidate data available for logistics scoring."],
+                "notes": [
+                    "No candidate data available from price/logistics agent.",
+                    (
+                        "Execution blockers observed: " + ", ".join(blockers)
+                        if blockers
+                        else "Execution blockers observed: none"
+                    ),
+                ],
+                "risk_flags": risk_flags,
                 "selected_candidate": None,
                 "evidence_coverage": 0.0,
             }
