@@ -93,6 +93,7 @@ class AgentOrchestrator:
             history=state.get("history", []),
             existing_constraints=state.get("constraints", {}),
             follow_up_count=state.get("follow_up_count", 0),
+            session_id=state["session_id"],
         )
 
         updated_outputs = dict(state.get("agent_outputs", {}))
@@ -112,19 +113,28 @@ class AgentOrchestrator:
         }
 
     async def _review_node(self, state: ShoppingState) -> dict[str, Any]:
-        review_output = await self._review.run(state.get("constraints", {}))
+        review_output = await self._review.run(
+            state.get("constraints", {}),
+            session_id=state["session_id"],
+        )
         updated_outputs = dict(state.get("agent_outputs", {}))
         updated_outputs["review"] = review_output
         return {"agent_outputs": updated_outputs}
 
     async def _visual_node(self, state: ShoppingState) -> dict[str, Any]:
-        visual_output = await self._visual.run(state.get("constraints", {}))
+        visual_output = await self._visual.run(
+            state.get("constraints", {}),
+            session_id=state["session_id"],
+        )
         updated_outputs = dict(state.get("agent_outputs", {}))
         updated_outputs["visual"] = visual_output
         return {"agent_outputs": updated_outputs}
 
     async def _price_node(self, state: ShoppingState) -> dict[str, Any]:
-        price_output = await self._price.run(state.get("constraints", {}))
+        price_output = await self._price.run(
+            state.get("constraints", {}),
+            session_id=state["session_id"],
+        )
         updated_outputs = dict(state.get("agent_outputs", {}))
         updated_outputs["price"] = price_output
         return {"agent_outputs": updated_outputs}
@@ -133,6 +143,7 @@ class AgentOrchestrator:
         decision_output = await self._decision.run(
             state.get("agent_outputs", {}),
             constraints=state.get("constraints", {}),
+            session_id=state["session_id"],
         )
         updated_outputs = dict(state.get("agent_outputs", {}))
         updated_outputs["decision"] = decision_output

@@ -25,6 +25,7 @@ class PlannerAgent:
         history: list[dict[str, Any]],
         existing_constraints: dict[str, Any] | None = None,
         follow_up_count: int = 0,
+        session_id: str | None = None,
     ) -> dict[str, Any]:
         del history  # history is wired for future planner upgrades.
         extracted = self._extract_constraints(message)
@@ -47,6 +48,7 @@ class PlannerAgent:
                     f"User message: {message}"
                 )
             },
+            session_id=session_id,
         )
 
         inferred_fields = [
@@ -194,7 +196,11 @@ class ReviewIntelligenceAgent:
         self._rag_service = rag_service
         self._evidence_analyzer = ReviewEvidenceAnalyzer()
 
-    async def run(self, constraints: dict[str, Any]) -> dict[str, Any]:
+    async def run(
+        self,
+        constraints: dict[str, Any],
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
         retrieval = await self._rag_service.retrieve_review_context(constraints)
         documents = retrieval["documents"]
         source_stats = retrieval["sourceStats"]
@@ -212,6 +218,7 @@ class ReviewIntelligenceAgent:
                     f"Use evidence: {[doc.content for doc in documents]}"
                 )
             },
+            session_id=session_id,
         )
 
         pros = ["Comfortable for long study sessions", "Good value for price"]
@@ -265,10 +272,15 @@ class VisualVerificationAgent:
         self._model_router = model_router
         self._visual_analyzer = VisualEvidenceAnalyzer()
 
-    async def run(self, constraints: dict[str, Any]) -> dict[str, Any]:
+    async def run(
+        self,
+        constraints: dict[str, Any],
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
         llm_result = await self._model_router.call(
             task_type="visual_verification",
             payload={"prompt": f"Evaluate image authenticity for {constraints}"},
+            session_id=session_id,
         )
         evidence_refs = [str(item) for item in constraints.get("visualEvidence", []) or []]
         analysis = self._visual_analyzer.analyze(evidence_refs)
@@ -302,7 +314,11 @@ class PriceLogisticsAgent:
         self._ui_executor = ui_executor
         self._stop_before_pay = stop_before_pay
 
-    async def run(self, constraints: dict[str, Any]) -> dict[str, Any]:
+    async def run(
+        self,
+        constraints: dict[str, Any],
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
         consent_autofill = bool(constraints.get("consentAutofill", False))
         execution_result = await self._ui_executor.execute(
             UIExecutionRequest(
@@ -323,6 +339,7 @@ class PriceLogisticsAgent:
                     f"constraints={constraints}, blockers={validated_output.blockers}"
                 )
             },
+            session_id=session_id,
         )
 
         response = validated_output.model_dump(by_alias=True)
@@ -343,10 +360,12 @@ class DecisionAgent:
         self,
         agent_outputs: dict[str, Any],
         constraints: dict[str, Any] | None = None,
+        session_id: str | None = None,
     ) -> dict[str, Any]:
         llm_result = await self._model_router.call(
             task_type="decision",
             payload={"prompt": "Create BUY/WAIT/AVOID recommendation from input signals."},
+            session_id=session_id,
         )
 
         scoring_result = self._scoring_engine.evaluate(

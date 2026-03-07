@@ -12,6 +12,7 @@ import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import Settings
+from app.services.observability import RuntimeTelemetry
 
 InvokeFn = Callable[[str, str, dict[str, Any], float], Awaitable[dict[str, Any]]]
 
@@ -26,11 +27,17 @@ class ModelCallResult:
 
 
 class ModelRouter:
-    def __init__(self, settings: Settings, invoke_fn: InvokeFn | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        invoke_fn: InvokeFn | None = None,
+        telemetry: RuntimeTelemetry | None = None,
+    ) -> None:
         self._settings = settings
         self._invoke_fn = invoke_fn or self._invoke_model
         self._logger = logging.getLogger(self.__class__.__name__)
         self._failure_counts: dict[str, int] = defaultdict(int)
+        self._telemetry = telemetry or RuntimeTelemetry()
         self._bedrock_client = None
 
         if not settings.mock_model:
@@ -38,7 +45,24 @@ class ModelRouter:
                 "bedrock-runtime", region_name=settings.aws_region
             )
 
-    async def call(self, task_type: str, payload: dict[str, Any]) -> ModelCallResult:
+    async def call(
+        self,
+        task_type: str,
+        payload: dict[str, Any],
+        session_id: str | None = None,
+    ) -> ModelCallResult:
+        session_key = session_id or "global"
+        usage = self._telemetry.session_usage(session_key)
+        if usage["calls"] >= self._settings.max_model_calls_per_session:
+            raise RuntimeError(
+                f"Session model call cap exceeded ({self._settings.max_model_calls_per_session})."
+            )
+        if usage["estimatedCostUsd"] >= self._settings.max_estimated_cost_per_session_usd:
+            raise RuntimeError(
+                "Session estimated cost cap exceeded "
+                f"({self._settings.max_estimated_cost_per_session_usd})."
+            )
+
         reason: str | None = None
 
         try:
@@ -49,6 +73,7 @@ class ModelRouter:
             )
             if primary_result.latency_seconds <= self._settings.latency_threshold_seconds:
                 self._failure_counts[task_type] = 0
+                self._record_metrics(task_type, session_key, primary_result)
                 return primary_result
 
             reason = (
@@ -79,7 +104,11 @@ class ModelRouter:
         )
         fallback_result.fallback_used = True
         fallback_result.fallback_reason = reason
+        self._record_metrics(task_type, session_key, fallback_result)
         return fallback_result
+
+    def snapshot_metrics(self) -> dict[str, Any]:
+        return self._telemetry.snapshot()
 
     async def _attempt_with_retries(
         self,
@@ -175,3 +204,22 @@ class ModelRouter:
             "timeoutSeconds": timeout_seconds,
         }
 
+    def _record_metrics(
+        self,
+        task_type: str,
+        session_id: str,
+        result: ModelCallResult,
+    ) -> None:
+        estimated_cost = self._estimate_cost(result.model_id)
+        self._telemetry.record(
+            task_type=task_type,
+            session_id=session_id,
+            latency_seconds=result.latency_seconds,
+            fallback_used=result.fallback_used,
+            estimated_cost_usd=estimated_cost,
+        )
+
+    def _estimate_cost(self, model_id: str) -> float:
+        if "lite" in model_id.lower():
+            return self._settings.estimated_cost_per_call_lite_usd
+        return self._settings.estimated_cost_per_call_pro_usd

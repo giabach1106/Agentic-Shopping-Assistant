@@ -9,6 +9,7 @@ from app.models.schemas import (
     CreateSessionResponse,
     HealthResponse,
     RecommendationResponse,
+    RuntimeMetricsResponse,
     ResumeRunRequest,
     SessionSnapshotResponse,
 )
@@ -30,6 +31,13 @@ async def health(request: Request) -> HealthResponse:
         defaultModel=services.settings.default_model_id,
         fallbackModel=services.settings.fallback_model_id,
     )
+
+
+@router.get("/v1/metrics/runtime", response_model=RuntimeMetricsResponse)
+async def runtime_metrics(request: Request) -> RuntimeMetricsResponse:
+    services = _services(request)
+    snapshot = services.model_router.snapshot_metrics()
+    return RuntimeMetricsResponse(**snapshot)
 
 
 @router.post(

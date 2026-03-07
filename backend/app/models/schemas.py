@@ -59,3 +59,11 @@ class HealthResponse(BaseModel):
     checkpoint_backend: str = Field(alias="checkpointBackend")
     default_model: str = Field(alias="defaultModel")
     fallback_model: str = Field(alias="fallbackModel")
+
+
+class RuntimeMetricsResponse(BaseModel):
+    total_calls: int = Field(alias="totalCalls")
+    total_fallback_calls: int = Field(alias="totalFallbackCalls")
+    total_estimated_cost_usd: float = Field(alias="totalEstimatedCostUsd")
+    tasks: dict[str, Any]
+    sessions_tracked: int = Field(alias="sessionsTracked")

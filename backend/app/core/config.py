@@ -31,6 +31,10 @@ class Settings:
     rag_collection_name: str
     ui_executor_backend: str
     stop_before_pay: bool
+    max_model_calls_per_session: int
+    max_estimated_cost_per_session_usd: float
+    estimated_cost_per_call_pro_usd: float
+    estimated_cost_per_call_lite_usd: float
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -66,4 +70,16 @@ class Settings:
             rag_collection_name=os.getenv("RAG_COLLECTION_NAME", "shopping_reviews"),
             ui_executor_backend=os.getenv("UI_EXECUTOR_BACKEND", "mock"),
             stop_before_pay=_as_bool(os.getenv("STOP_BEFORE_PAY"), default=True),
+            max_model_calls_per_session=int(
+                os.getenv("MAX_MODEL_CALLS_PER_SESSION", "40")
+            ),
+            max_estimated_cost_per_session_usd=float(
+                os.getenv("MAX_ESTIMATED_COST_PER_SESSION_USD", "0.35")
+            ),
+            estimated_cost_per_call_pro_usd=float(
+                os.getenv("ESTIMATED_COST_PER_CALL_PRO_USD", "0.01")
+            ),
+            estimated_cost_per_call_lite_usd=float(
+                os.getenv("ESTIMATED_COST_PER_CALL_LITE_USD", "0.004")
+            ),
         )

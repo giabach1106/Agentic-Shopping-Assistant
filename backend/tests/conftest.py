@@ -30,6 +30,10 @@ def test_settings(tmp_path: Path) -> Settings:
         rag_collection_name="shopping_reviews_test",
         ui_executor_backend="mock",
         stop_before_pay=True,
+        max_model_calls_per_session=50,
+        max_estimated_cost_per_session_usd=1.0,
+        estimated_cost_per_call_pro_usd=0.01,
+        estimated_cost_per_call_lite_usd=0.004,
     )
 
 
