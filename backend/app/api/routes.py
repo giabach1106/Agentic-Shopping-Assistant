@@ -53,10 +53,14 @@ async def chat(request: Request, payload: ChatRequest) -> ChatResponse:
 
     await services.session_service.add_user_message(payload.session_id, payload.message)
     history = await services.session_service.get_history(payload.session_id)
+    previous_checkpoint = await services.session_service.get_checkpoint_state(
+        payload.session_id
+    )
     orchestration = await services.orchestrator.run_turn(
         session_id=payload.session_id,
         user_message=payload.message,
         history=history,
+        previous_state=previous_checkpoint,
     )
     await services.session_service.add_assistant_message(
         payload.session_id, orchestration.reply
@@ -80,4 +84,3 @@ async def get_session(request: Request, session_id: str) -> SessionSnapshotRespo
             detail=f"Session '{session_id}' was not found.",
         )
     return SessionSnapshotResponse(**snapshot)
-

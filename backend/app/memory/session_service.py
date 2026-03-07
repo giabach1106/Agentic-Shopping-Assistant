@@ -44,6 +44,9 @@ class SessionService:
     async def save_state(self, session_id: str, state: dict[str, Any]) -> None:
         await self._checkpoint_store.save_checkpoint(session_id, state)
 
+    async def get_checkpoint_state(self, session_id: str) -> dict[str, Any] | None:
+        return await self._checkpoint_store.get_checkpoint(session_id)
+
     async def get_snapshot(self, session_id: str) -> dict[str, Any] | None:
         session = await self._sqlite_store.get_session(session_id)
         if session is None:
@@ -65,4 +68,3 @@ class SessionService:
             ],
             "checkpointState": checkpoint,
         }
-

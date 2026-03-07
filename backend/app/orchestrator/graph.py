@@ -42,12 +42,18 @@ class AgentOrchestrator:
         session_id: str,
         user_message: str,
         history: list[dict[str, Any]],
+        previous_state: dict[str, Any] | None = None,
     ) -> OrchestratorResult:
+        previous_state = previous_state or {}
         initial_state: ShoppingState = {
             "session_id": session_id,
             "user_message": user_message,
             "history": history,
+            "constraints": previous_state.get("constraints", {}),
             "agent_outputs": {},
+            "follow_up_count": int(previous_state.get("follow_up_count", 0)),
+            "needs_follow_up": False,
+            "reply": "",
         }
         final_state = await self._graph.ainvoke(initial_state)
         return OrchestratorResult(reply=final_state["reply"], state=dict(final_state))
@@ -81,10 +87,12 @@ class AgentOrchestrator:
             return "follow_up"
         return "continue"
 
-    async def _planner_node(self, state: ShoppingState) -> ShoppingState:
+    async def _planner_node(self, state: ShoppingState) -> dict[str, Any]:
         planner_output = await self._planner.run(
             message=state["user_message"],
             history=state.get("history", []),
+            existing_constraints=state.get("constraints", {}),
+            follow_up_count=state.get("follow_up_count", 0),
         )
 
         updated_outputs = dict(state.get("agent_outputs", {}))
@@ -98,29 +106,30 @@ class AgentOrchestrator:
         return {
             "constraints": planner_output["constraints"],
             "agent_outputs": updated_outputs,
+            "follow_up_count": planner_output["followUpCount"],
             "needs_follow_up": needs_follow_up,
             "reply": reply,
         }
 
-    async def _review_node(self, state: ShoppingState) -> ShoppingState:
+    async def _review_node(self, state: ShoppingState) -> dict[str, Any]:
         review_output = await self._review.run(state.get("constraints", {}))
         updated_outputs = dict(state.get("agent_outputs", {}))
         updated_outputs["review"] = review_output
         return {"agent_outputs": updated_outputs}
 
-    async def _visual_node(self, state: ShoppingState) -> ShoppingState:
+    async def _visual_node(self, state: ShoppingState) -> dict[str, Any]:
         visual_output = await self._visual.run(state.get("constraints", {}))
         updated_outputs = dict(state.get("agent_outputs", {}))
         updated_outputs["visual"] = visual_output
         return {"agent_outputs": updated_outputs}
 
-    async def _price_node(self, state: ShoppingState) -> ShoppingState:
+    async def _price_node(self, state: ShoppingState) -> dict[str, Any]:
         price_output = await self._price.run(state.get("constraints", {}))
         updated_outputs = dict(state.get("agent_outputs", {}))
         updated_outputs["price"] = price_output
         return {"agent_outputs": updated_outputs}
 
-    async def _decision_node(self, state: ShoppingState) -> ShoppingState:
+    async def _decision_node(self, state: ShoppingState) -> dict[str, Any]:
         decision_output = await self._decision.run(state.get("agent_outputs", {}))
         updated_outputs = dict(state.get("agent_outputs", {}))
         updated_outputs["decision"] = decision_output
@@ -132,4 +141,3 @@ class AgentOrchestrator:
             f"{decision_output['topReasons'][0]}"
         )
         return {"agent_outputs": updated_outputs, "reply": recommendation}
-

@@ -1,0 +1,20 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      AGENT_REDIS_URL: redis://redis:6379/0
+      AGENT_SQLITE_PATH: /app/data/agent_memory.sqlite3
+      MOCK_MODEL: "true"
+    volumes:
+      - ./backend/data:/app/data
+    depends_on:
+      - redis

@@ -17,12 +17,15 @@ def test_settings(tmp_path: Path) -> Settings:
         redis_url="redis://localhost:6399/0",
         redis_key_prefix="test:agentic-shopping-assistant:checkpoint",
         aws_region="us-east-1",
+        aws_bedrock_kb_id=None,
         default_model_id="us.amazon.nova-2-pro-v1:0",
         fallback_model_id="us.amazon.nova-2-lite-v1:0",
         model_timeout_seconds=1.0,
         latency_threshold_seconds=0.3,
         max_retries=1,
         mock_model=True,
+        rag_backend="inmemory",
+        rag_top_k=5,
     )
 
 
@@ -31,4 +34,3 @@ def client(test_settings: Settings) -> TestClient:
     app = create_app(test_settings)
     with TestClient(app) as test_client:
         yield test_client
-

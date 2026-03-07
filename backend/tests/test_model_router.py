@@ -14,12 +14,15 @@ def _settings() -> Settings:
         redis_url="redis://localhost:6399/0",
         redis_key_prefix="test:key",
         aws_region="us-east-1",
+        aws_bedrock_kb_id=None,
         default_model_id="pro-model",
         fallback_model_id="lite-model",
         model_timeout_seconds=1.0,
         latency_threshold_seconds=0.5,
         max_retries=1,
         mock_model=True,
+        rag_backend="inmemory",
+        rag_top_k=5,
     )
 
 
@@ -42,4 +45,3 @@ def test_model_router_falls_back_on_error() -> None:
         assert calls == ["pro-model", "lite-model"]
 
     asyncio.run(run_test())
-

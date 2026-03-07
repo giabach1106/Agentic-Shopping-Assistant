@@ -18,12 +18,15 @@ class Settings:
     redis_url: str
     redis_key_prefix: str
     aws_region: str
+    aws_bedrock_kb_id: str | None
     default_model_id: str
     fallback_model_id: str
     model_timeout_seconds: float
     latency_threshold_seconds: float
     max_retries: int
     mock_model: bool
+    rag_backend: str
+    rag_top_k: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -38,6 +41,7 @@ class Settings:
                 "AGENT_REDIS_KEY_PREFIX", "agentic-shopping-assistant:checkpoint"
             ),
             aws_region=os.getenv("AWS_REGION", "us-east-1"),
+            aws_bedrock_kb_id=os.getenv("BEDROCK_KB_ID"),
             default_model_id=os.getenv(
                 "NOVA_DEFAULT_MODEL_ID", "us.amazon.nova-2-pro-v1:0"
             ),
@@ -50,5 +54,6 @@ class Settings:
             ),
             max_retries=int(os.getenv("MODEL_MAX_RETRIES", "2")),
             mock_model=_as_bool(os.getenv("MOCK_MODEL"), default=True),
+            rag_backend=os.getenv("RAG_BACKEND", "inmemory"),
+            rag_top_k=int(os.getenv("RAG_TOP_K", "5")),
         )
-

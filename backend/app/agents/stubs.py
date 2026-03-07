@@ -4,9 +4,13 @@ import re
 from typing import Any
 
 from app.core.model_router import ModelRouter
+from app.models.planner import SearchConstraints
+from app.rag.providers import HybridRAGService
 
 
 class PlannerAgent:
+    _critical_fields = ("category", "budgetMax", "minRating", "deliveryDeadline")
+
     def __init__(self, model_router: ModelRouter) -> None:
         self._model_router = model_router
 
@@ -14,14 +18,21 @@ class PlannerAgent:
         self,
         message: str,
         history: list[dict[str, Any]],
+        existing_constraints: dict[str, Any] | None = None,
+        follow_up_count: int = 0,
     ) -> dict[str, Any]:
-        constraints = self._extract_constraints(message)
+        del history  # history is wired for future planner upgrades.
+        extracted = self._extract_constraints(message)
+        merged = self._merge_constraints(existing_constraints or {}, extracted)
+        constraints = SearchConstraints.model_validate(merged)
+        constraints_dict = constraints.to_public_dict()
+
         missing_fields = [
             field
-            for field in ("category", "budgetMax", "minRating", "deliveryDeadline")
-            if constraints.get(field) in (None, "", [])
+            for field in self._critical_fields
+            if constraints_dict.get(field) in (None, "", [])
         ]
-        needs_follow_up = len(missing_fields) > 0
+        needs_follow_up = len(missing_fields) > 0 and follow_up_count < 4
 
         llm_result = await self._model_router.call(
             task_type="planner",
@@ -33,19 +44,30 @@ class PlannerAgent:
             },
         )
 
+        inferred_fields = [
+            field
+            for field in self._critical_fields
+            if extracted.get(field) in (None, "", [])
+            and (existing_constraints or {}).get(field) not in (None, "", [])
+        ]
+
         follow_up_question = None
         if needs_follow_up:
             missing_field = missing_fields[0]
-            follow_up_question = (
-                f"I still need your {missing_field}. "
-                "Can you provide it so I can continue?"
-            )
+            follow_up_question = self._build_follow_up_question(missing_field)
+            next_follow_up_count = follow_up_count + 1
+        elif len(missing_fields) == 0:
+            next_follow_up_count = 0
+        else:
+            next_follow_up_count = follow_up_count
 
         return {
-            "constraints": constraints,
+            "constraints": constraints_dict,
             "missingFields": missing_fields,
+            "inferredFields": inferred_fields,
             "needsFollowUp": needs_follow_up,
             "followUpQuestion": follow_up_question,
+            "followUpCount": next_follow_up_count,
             "modelMeta": {
                 "modelId": llm_result.model_id,
                 "fallbackUsed": llm_result.fallback_used,
@@ -53,6 +75,44 @@ class PlannerAgent:
                 "latencySeconds": llm_result.latency_seconds,
             },
         }
+
+    def _build_follow_up_question(self, missing_field: str) -> str:
+        question_map = {
+            "category": "What product category do you want me to search?",
+            "budgetMax": "What is your maximum budget?",
+            "minRating": "What minimum rating should I enforce (for example, 4 stars)?",
+            "deliveryDeadline": "By what date or day do you need the item delivered?",
+        }
+        return question_map.get(
+            missing_field,
+            f"I still need your {missing_field}. Can you provide it so I can continue?",
+        )
+
+    def _merge_constraints(
+        self,
+        existing: dict[str, Any],
+        extracted: dict[str, Any],
+    ) -> dict[str, Any]:
+        merged: dict[str, Any] = {}
+        all_keys = set(existing.keys()) | set(extracted.keys())
+        for key in all_keys:
+            existing_value = existing.get(key)
+            new_value = extracted.get(key)
+            if isinstance(existing_value, list) or isinstance(new_value, list):
+                merged[key] = self._merge_list_values(existing_value, new_value)
+                continue
+            merged[key] = new_value if new_value not in (None, "", []) else existing_value
+        return merged
+
+    def _merge_list_values(self, existing: Any, new: Any) -> list[str]:
+        existing_list = existing if isinstance(existing, list) else []
+        new_list = new if isinstance(new, list) else []
+        merged: list[str] = []
+        for item in [*existing_list, *new_list]:
+            text = str(item).strip()
+            if text and text not in merged:
+                merged.append(text)
+        return merged
 
     def _extract_constraints(self, message: str) -> dict[str, Any]:
         lower = message.lower()
@@ -69,6 +129,8 @@ class PlannerAgent:
 
         rating_match = re.search(r"(\d(?:\.\d)?)\+?\s*stars?", lower)
         min_rating = float(rating_match.group(1)) if rating_match else None
+        if min_rating is not None and min_rating > 5:
+            min_rating = None
 
         deadline_match = re.search(r"delivered by\s+([a-z0-9 ,]+)", lower)
         delivery_deadline = deadline_match.group(1).strip() if deadline_match else None
@@ -79,6 +141,13 @@ class PlannerAgent:
         if "dorm" in lower:
             must_have.append("dorm-friendly size")
 
+        exclude: list[str] = []
+        exclude_match = re.findall(r"(?:not|exclude)\s+([a-z0-9 -]+)", lower)
+        for value in exclude_match:
+            cleaned = value.strip()
+            if cleaned:
+                exclude.append(cleaned)
+
         return {
             "category": category,
             "budgetMax": budget_max,
@@ -86,25 +155,47 @@ class PlannerAgent:
             "deliveryDeadline": delivery_deadline,
             "mustHave": must_have,
             "niceToHave": [],
-            "exclude": [],
+            "exclude": exclude,
         }
 
 
 class ReviewIntelligenceAgent:
-    def __init__(self, model_router: ModelRouter) -> None:
+    def __init__(self, model_router: ModelRouter, rag_service: HybridRAGService) -> None:
         self._model_router = model_router
+        self._rag_service = rag_service
 
     async def run(self, constraints: dict[str, Any]) -> dict[str, Any]:
+        retrieval = await self._rag_service.retrieve_review_context(constraints)
+        documents = retrieval["documents"]
+        evidence_refs = [doc.doc_id for doc in documents]
+        source_stats = retrieval["sourceStats"]
+
         llm_result = await self._model_router.call(
             task_type="review_intelligence",
-            payload={"prompt": f"Analyze review quality for {constraints}"},
+            payload={
+                "prompt": (
+                    f"Analyze review quality for {constraints}. "
+                    f"Use evidence: {[doc.content for doc in documents]}"
+                )
+            },
         )
+
+        pros = ["Comfortable for long study sessions", "Good value for price"]
+        cons = ["Assembly time can be long", "Armrest durability varies"]
+        risk_flags = ["Some reviews mention paid promotion disclaimers"]
+        if "tiktok" in source_stats:
+            risk_flags.append("Contains creator-sourced opinions; verify sponsorship tags.")
+        if len(evidence_refs) == 0:
+            risk_flags.append("Low evidence coverage across sources.")
+
         return {
-            "pros": ["Comfortable for long study sessions", "Good value for price"],
-            "cons": ["Assembly time can be long", "Armrest durability varies"],
-            "riskFlags": ["Some reviews mention paid promotion disclaimers"],
+            "pros": pros,
+            "cons": cons,
+            "riskFlags": risk_flags,
             "paidPromoLikelihood": 0.28,
             "confidence": 0.77,
+            "sourceStats": source_stats,
+            "evidenceRefs": evidence_refs,
             "modelMeta": {
                 "modelId": llm_result.model_id,
                 "fallbackUsed": llm_result.fallback_used,
@@ -205,4 +296,3 @@ class DecisionAgent:
                 "fallbackReason": llm_result.fallback_reason,
             },
         }
-

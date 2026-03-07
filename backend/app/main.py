@@ -20,15 +20,17 @@ from app.memory.redis_checkpoint import RedisCheckpointStore
 from app.memory.session_service import SessionService
 from app.memory.sqlite_store import SQLiteSessionStore
 from app.orchestrator.graph import AgentOrchestrator
+from app.rag.providers import build_rag_service
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     configure_logging()
     resolved_settings = settings or Settings.from_env()
+    rag_service = build_rag_service(resolved_settings)
 
     model_router = ModelRouter(resolved_settings)
     planner = PlannerAgent(model_router)
-    review = ReviewIntelligenceAgent(model_router)
+    review = ReviewIntelligenceAgent(model_router, rag_service)
     visual = VisualVerificationAgent(model_router)
     price = PriceLogisticsAgent(model_router)
     decision = DecisionAgent(model_router)
@@ -51,6 +53,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     services = ServiceContainer(
         settings=resolved_settings,
         model_router=model_router,
+        rag_service=rag_service,
         session_service=session_service,
         orchestrator=orchestrator,
     )
