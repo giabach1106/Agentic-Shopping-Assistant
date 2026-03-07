@@ -61,3 +61,20 @@ def test_visual_returns_need_more_evidence_when_no_images(client: TestClient) ->
     assert visual_output["status"] == "NEED_MORE_EVIDENCE"
     assert len(visual_output["requiredEvidence"]) > 0
 
+
+def test_visual_returns_ok_when_user_photo_is_available(client: TestClient) -> None:
+    session_id = _new_session(client)
+    response = client.post(
+        "/v1/chat",
+        json={
+            "sessionId": session_id,
+            "message": (
+                "I need an ergonomic chair under $150 with 4 stars delivered by friday "
+                "and uploaded photo from my room"
+            ),
+        },
+    )
+    assert response.status_code == 200
+    visual_output = response.json()["state"]["agent_outputs"]["visual"]
+    assert visual_output["status"] == "OK"
+    assert len(visual_output["evidenceRefs"]) > 0

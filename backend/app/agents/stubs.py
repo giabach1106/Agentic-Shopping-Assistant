@@ -9,6 +9,7 @@ from app.models.planner import SearchConstraints
 from app.rag.providers import HybridRAGService
 from app.services.review_analysis import ReviewEvidenceAnalyzer
 from app.services.trust_scoring import TrustScoringEngine
+from app.services.visual_analysis import VisualEvidenceAnalyzer
 from app.tools.ui_executor import UIExecutionRequest, UIExecutor
 
 
@@ -163,8 +164,16 @@ class PlannerAgent:
             )
 
         visual_evidence: list[str] = []
-        if any(phrase in lower for phrase in ("uploaded photo", "uploaded image", "my room photo")):
+        if any(phrase in lower for phrase in ("uploaded photo", "uploaded image", "my room photo", "image attached", "photo attached")):
             visual_evidence.append("user-upload-1")
+        if "blurry" in lower:
+            visual_evidence.append("blurry-evidence")
+        if any(token in lower for token in ("ai image", "ai-generated image", "synthetic image")):
+            visual_evidence.append("ai-generated-signal")
+        if "color mismatch" in lower or "different color" in lower:
+            visual_evidence.append("color-mismatch")
+        if "scale issue" in lower or "size looks off" in lower:
+            visual_evidence.append("scale-issue")
 
         return {
             "category": category,
@@ -254,36 +263,24 @@ class ReviewIntelligenceAgent:
 class VisualVerificationAgent:
     def __init__(self, model_router: ModelRouter) -> None:
         self._model_router = model_router
+        self._visual_analyzer = VisualEvidenceAnalyzer()
 
     async def run(self, constraints: dict[str, Any]) -> dict[str, Any]:
         llm_result = await self._model_router.call(
             task_type="visual_verification",
             payload={"prompt": f"Evaluate image authenticity for {constraints}"},
         )
-        evidence_refs = constraints.get("visualEvidence", []) or []
-        if len(evidence_refs) == 0:
-            payload = VisualInsight(
-                status="NEED_MORE_EVIDENCE",
-                authenticityScore=48,
-                mismatchFlags=[],
-                visualRisks=["No user-provided image evidence available for cross-check."],
-                confidence=0.35,
-                requiredEvidence=[
-                    "At least one user photo from real usage context.",
-                    "One close-up product texture image.",
-                ],
-                evidenceRefs=[],
-            )
-        else:
-            payload = VisualInsight(
-                status="OK",
-                authenticityScore=74,
-                mismatchFlags=["Minor color mismatch between listing and user photo."],
-                visualRisks=[],
-                confidence=0.67,
-                requiredEvidence=[],
-                evidenceRefs=[str(item) for item in evidence_refs],
-            )
+        evidence_refs = [str(item) for item in constraints.get("visualEvidence", []) or []]
+        analysis = self._visual_analyzer.analyze(evidence_refs)
+        payload = VisualInsight(
+            status=analysis.status,
+            authenticityScore=analysis.authenticity_score,
+            mismatchFlags=analysis.mismatch_flags,
+            visualRisks=analysis.visual_risks,
+            confidence=analysis.confidence,
+            requiredEvidence=analysis.required_evidence,
+            evidenceRefs=analysis.evidence_refs,
+        )
 
         output = payload.model_dump(by_alias=True)
         output["modelMeta"] = {
