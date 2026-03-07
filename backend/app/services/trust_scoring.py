@@ -31,6 +31,8 @@ class TrustScoringEngine:
         review = agent_outputs.get("review", {})
         visual = agent_outputs.get("visual", {})
         price_payload = agent_outputs.get("price", {})
+        review_evidence_refs = [str(item) for item in review.get("evidenceRefs", [])]
+        visual_evidence_refs = [str(item) for item in visual.get("evidenceRefs", [])]
 
         review_score, review_notes, review_risks = self._score_review_authenticity(review)
         visual_score, visual_notes, visual_risks = self._score_visual_reliability(visual)
@@ -59,6 +61,21 @@ class TrustScoringEngine:
             *visual_notes,
             *logistics_eval["notes"],
         ]
+        if review_evidence_refs:
+            why_ranked_here.append(
+                "Review evidence IDs used: " + ", ".join(review_evidence_refs[:3])
+            )
+        if visual_evidence_refs:
+            why_ranked_here.append(
+                "Visual evidence IDs used: " + ", ".join(visual_evidence_refs[:3])
+            )
+        selected_candidate = logistics_eval["selected_candidate"]
+        if selected_candidate is not None:
+            why_ranked_here.append(
+                "Selected candidate details: "
+                f"{selected_candidate.get('title')} @ ${selected_candidate.get('price')} "
+                f"({selected_candidate.get('shippingETA')})."
+            )
 
         top_reasons = self._top_reasons(
             weighted_review=weighted_review,
@@ -97,9 +114,9 @@ class TrustScoringEngine:
             top_reasons=top_reasons,
             risk_flags=risk_flags,
             confidence=confidence,
-            why_ranked_here=why_ranked_here[:6],
+            why_ranked_here=why_ranked_here,
             score_breakdown=breakdown,
-            selected_candidate=logistics_eval["selected_candidate"],
+            selected_candidate=selected_candidate,
         )
 
     def _score_review_authenticity(
@@ -139,19 +156,30 @@ class TrustScoringEngine:
     def _score_visual_reliability(
         self, visual: dict[str, Any]
     ) -> tuple[float, list[str], list[str]]:
+        status = str(visual.get("status", "OK")).upper()
         authenticity = float(visual.get("authenticityScore", 50)) / 100
         confidence = float(visual.get("confidence", 0.5))
         mismatch_count = len(visual.get("mismatchFlags", []))
+        evidence_count = len(visual.get("evidenceRefs", []))
+        required_evidence_count = len(visual.get("requiredEvidence", []))
 
-        base = (0.7 * authenticity) + (0.3 * confidence)
+        base = (0.62 * authenticity) + (0.28 * confidence) + (0.1 * _clamp(evidence_count / 2))
         penalty = min(0.25, mismatch_count * 0.06)
+        if status == "NEED_MORE_EVIDENCE":
+            penalty += 0.28
         score = _clamp(base - penalty)
 
         notes = [
             f"Visual authenticity estimate: {round(authenticity * 100, 1)}%.",
             f"Detected {mismatch_count} visual mismatch flags.",
         ]
+        if status == "NEED_MORE_EVIDENCE":
+            notes.append(
+                f"Visual verification requested {required_evidence_count} additional evidence items."
+            )
         risks: list[str] = []
+        if status == "NEED_MORE_EVIDENCE":
+            risks.append("Visual verification incomplete due to missing image evidence.")
         if authenticity < 0.4:
             risks.append("Low visual authenticity score from image verification.")
         if mismatch_count >= 3:
@@ -164,6 +192,7 @@ class TrustScoringEngine:
         constraints: dict[str, Any],
     ) -> dict[str, Any]:
         candidates = price_payload.get("candidates", [])
+        blockers = [str(item).lower() for item in price_payload.get("blockers", [])]
         if not candidates:
             return {
                 "price_fairness": 0.5,
@@ -202,8 +231,16 @@ class TrustScoringEngine:
             ),
             f"Candidate shipping ETA: {candidate.get('shippingETA', 'unknown')}.",
         ]
+        if blockers:
+            notes.append("Execution blockers observed: " + ", ".join(blockers))
 
         risk_flags: list[str] = []
+        if "automation_blocked" in blockers:
+            risk_flags.append(
+                "Checkout automation blocked by anti-bot or access constraints."
+            )
+            best["delivery_score"] = _clamp(best["delivery_score"] - 0.25)
+            best["return_score"] = _clamp(best["return_score"] - 0.12)
         if best["delivery_score"] < 0.45:
             risk_flags.append("Delivery reliability appears weak for the selected offer.")
         if best["return_score"] < 0.45:
@@ -216,7 +253,7 @@ class TrustScoringEngine:
             "notes": notes,
             "risk_flags": risk_flags,
             "selected_candidate": candidate,
-            "evidence_coverage": _clamp(len(candidates) / 3.0),
+            "evidence_coverage": _clamp((len(candidates) - len(blockers)) / 3.0),
         }
 
     def _price_fairness(self, candidate: dict[str, Any], constraints: dict[str, Any]) -> float:

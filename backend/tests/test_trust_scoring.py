@@ -35,6 +35,8 @@ def test_trust_scoring_returns_buy_for_strong_signals() -> None:
     assert result.trust_score >= 75
     assert result.verdict == "BUY"
     assert len(result.top_reasons) >= 1
+    assert any("Review evidence IDs used" in item for item in result.why_ranked_here)
+    assert any("Selected candidate details" in item for item in result.why_ranked_here)
 
 
 def test_trust_scoring_returns_avoid_for_severe_review_risk() -> None:
@@ -69,3 +71,77 @@ def test_trust_scoring_returns_avoid_for_severe_review_risk() -> None:
     assert result.verdict == "AVOID"
     assert any("paid-promotion" in flag.lower() for flag in result.risk_flags)
 
+
+def test_trust_scoring_penalizes_missing_visual_evidence() -> None:
+    engine = TrustScoringEngine()
+    result = engine.evaluate(
+        agent_outputs={
+            "review": {
+                "confidence": 0.78,
+                "evidenceQualityScore": 0.8,
+                "paidPromoLikelihood": 0.15,
+                "evidenceRefs": ["r1", "r2", "r3"],
+                "sourceStats": {"amazon": 2, "reddit": 1},
+                "riskFlags": [],
+            },
+            "visual": {
+                "status": "NEED_MORE_EVIDENCE",
+                "authenticityScore": 52,
+                "confidence": 0.38,
+                "mismatchFlags": [],
+                "requiredEvidence": ["close-up material photo"],
+                "evidenceRefs": [],
+            },
+            "price": {
+                "candidates": [
+                    {
+                        "title": "C",
+                        "price": 130,
+                        "shippingETA": "2-4 days",
+                        "returnPolicy": "30-day return",
+                    }
+                ]
+            },
+        },
+        constraints={"budgetMax": 150, "deliveryDeadline": "friday"},
+    )
+    assert any("missing image evidence" in flag.lower() for flag in result.risk_flags)
+    assert result.score_breakdown["visualReliability"]["weightedPoints"] < 12
+
+
+def test_trust_scoring_penalizes_automation_blockers() -> None:
+    engine = TrustScoringEngine()
+    result = engine.evaluate(
+        agent_outputs={
+            "review": {
+                "confidence": 0.84,
+                "evidenceQualityScore": 0.82,
+                "paidPromoLikelihood": 0.2,
+                "evidenceRefs": ["r1", "r2", "r3"],
+                "sourceStats": {"amazon": 2, "reddit": 1},
+                "riskFlags": [],
+            },
+            "visual": {
+                "status": "OK",
+                "authenticityScore": 82,
+                "confidence": 0.72,
+                "mismatchFlags": [],
+                "requiredEvidence": [],
+                "evidenceRefs": ["v1"],
+            },
+            "price": {
+                "candidates": [
+                    {
+                        "title": "D",
+                        "price": 120,
+                        "shippingETA": "2-4 days",
+                        "returnPolicy": "30-day return",
+                    }
+                ],
+                "blockers": ["automation_blocked"],
+            },
+        },
+        constraints={"budgetMax": 150, "deliveryDeadline": "friday"},
+    )
+    assert any("automation blocked" in flag.lower() for flag in result.risk_flags)
+    assert result.verdict in {"WAIT", "AVOID"}
