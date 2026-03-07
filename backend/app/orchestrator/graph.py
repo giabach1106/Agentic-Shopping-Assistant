@@ -130,7 +130,10 @@ class AgentOrchestrator:
         return {"agent_outputs": updated_outputs}
 
     async def _decision_node(self, state: ShoppingState) -> dict[str, Any]:
-        decision_output = await self._decision.run(state.get("agent_outputs", {}))
+        decision_output = await self._decision.run(
+            state.get("agent_outputs", {}),
+            constraints=state.get("constraints", {}),
+        )
         updated_outputs = dict(state.get("agent_outputs", {}))
         updated_outputs["decision"] = decision_output
 

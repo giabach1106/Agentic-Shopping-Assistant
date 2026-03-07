@@ -6,6 +6,7 @@ from typing import Any
 from app.core.model_router import ModelRouter
 from app.models.planner import SearchConstraints
 from app.rag.providers import HybridRAGService
+from app.services.trust_scoring import TrustScoringEngine
 
 
 class PlannerAgent:
@@ -240,8 +241,18 @@ class PriceLogisticsAgent:
                     "title": "ErgoFlex Dorm Chair",
                     "sourceUrl": "https://example.com/product/ergoflex-chair",
                     "price": 139.99,
+                    "rating": 4.4,
                     "shippingETA": "2-4 days",
                     "returnPolicy": "30-day return",
+                    "checkoutReady": False,
+                },
+                {
+                    "title": "CampusComfort Mesh Chair",
+                    "sourceUrl": "https://example.com/product/campuscomfort-chair",
+                    "price": 124.99,
+                    "rating": 4.1,
+                    "shippingETA": "5-7 days",
+                    "returnPolicy": "14-day return",
                     "checkoutReady": False,
                 }
             ],
@@ -261,35 +272,32 @@ class PriceLogisticsAgent:
 class DecisionAgent:
     def __init__(self, model_router: ModelRouter) -> None:
         self._model_router = model_router
+        self._scoring_engine = TrustScoringEngine()
 
-    async def run(self, agent_outputs: dict[str, Any]) -> dict[str, Any]:
+    async def run(
+        self,
+        agent_outputs: dict[str, Any],
+        constraints: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         llm_result = await self._model_router.call(
             task_type="decision",
             payload={"prompt": "Create BUY/WAIT/AVOID recommendation from input signals."},
         )
 
-        review_score = 30 * agent_outputs["review"]["confidence"]
-        visual_score = 20 * (agent_outputs["visual"]["authenticityScore"] / 100)
-        price_score = 25 * 0.78
-        delivery_score = 15 * 0.72
-        return_score = 10 * 0.80
-        trust_score = round(review_score + visual_score + price_score + delivery_score + return_score, 2)
-
-        if trust_score >= 75:
-            verdict = "BUY"
-        elif trust_score >= 55:
-            verdict = "WAIT"
-        else:
-            verdict = "AVOID"
+        scoring_result = self._scoring_engine.evaluate(
+            agent_outputs=agent_outputs,
+            constraints=constraints or {},
+        )
 
         return {
-            "trustScore": trust_score,
-            "verdict": verdict,
-            "topReasons": [
-                "Price is within budget and shipping is acceptable",
-                "Review sentiment is mostly positive with moderate risk flags",
-            ],
-            "confidence": 0.74,
+            "trustScore": scoring_result.trust_score,
+            "verdict": scoring_result.verdict,
+            "topReasons": scoring_result.top_reasons,
+            "riskFlags": scoring_result.risk_flags,
+            "confidence": scoring_result.confidence,
+            "whyRankedHere": scoring_result.why_ranked_here,
+            "scoreBreakdown": scoring_result.score_breakdown,
+            "selectedCandidate": scoring_result.selected_candidate,
             "modelMeta": {
                 "modelId": llm_result.model_id,
                 "fallbackUsed": llm_result.fallback_used,
