@@ -21,6 +21,7 @@ from app.memory.session_service import SessionService
 from app.memory.sqlite_store import SQLiteSessionStore
 from app.orchestrator.graph import AgentOrchestrator
 from app.rag.providers import build_rag_service
+from app.tools.ui_executor import build_ui_executor
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -29,10 +30,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     rag_service = build_rag_service(resolved_settings)
 
     model_router = ModelRouter(resolved_settings)
+    ui_executor = build_ui_executor(resolved_settings, model_router)
     planner = PlannerAgent(model_router)
     review = ReviewIntelligenceAgent(model_router, rag_service)
     visual = VisualVerificationAgent(model_router)
-    price = PriceLogisticsAgent(model_router)
+    price = PriceLogisticsAgent(
+        model_router=model_router,
+        ui_executor=ui_executor,
+        stop_before_pay=resolved_settings.stop_before_pay,
+    )
     decision = DecisionAgent(model_router)
 
     orchestrator = AgentOrchestrator(
@@ -54,6 +60,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings=resolved_settings,
         model_router=model_router,
         rag_service=rag_service,
+        ui_executor=ui_executor,
         session_service=session_service,
         orchestrator=orchestrator,
     )

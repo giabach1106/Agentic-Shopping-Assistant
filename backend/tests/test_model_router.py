@@ -23,6 +23,8 @@ def _settings() -> Settings:
         mock_model=True,
         rag_backend="inmemory",
         rag_top_k=5,
+        ui_executor_backend="mock",
+        stop_before_pay=True,
     )
 
 

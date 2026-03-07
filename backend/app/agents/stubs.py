@@ -4,10 +4,12 @@ import re
 from typing import Any
 
 from app.core.model_router import ModelRouter
+from app.models.agent_outputs import PriceLogisticsOutput, VisualInsight
 from app.models.planner import SearchConstraints
 from app.rag.providers import HybridRAGService
 from app.services.review_analysis import ReviewEvidenceAnalyzer
 from app.services.trust_scoring import TrustScoringEngine
+from app.tools.ui_executor import UIExecutionRequest, UIExecutor
 
 
 class PlannerAgent:
@@ -150,6 +152,20 @@ class PlannerAgent:
             if cleaned:
                 exclude.append(cleaned)
 
+        consent_autofill: bool | None = None
+        if any(
+            phrase in lower
+            for phrase in ("autofill", "auto fill", "fill checkout", "fill form")
+        ):
+            consent_autofill = not any(
+                phrase in lower
+                for phrase in ("do not autofill", "don't autofill", "no autofill")
+            )
+
+        visual_evidence: list[str] = []
+        if any(phrase in lower for phrase in ("uploaded photo", "uploaded image", "my room photo")):
+            visual_evidence.append("user-upload-1")
+
         return {
             "category": category,
             "budgetMax": budget_max,
@@ -158,6 +174,8 @@ class PlannerAgent:
             "mustHave": must_have,
             "niceToHave": [],
             "exclude": exclude,
+            "consentAutofill": consent_autofill,
+            "visualEvidence": visual_evidence,
         }
 
 
@@ -242,59 +260,81 @@ class VisualVerificationAgent:
             task_type="visual_verification",
             payload={"prompt": f"Evaluate image authenticity for {constraints}"},
         )
-        return {
-            "authenticityScore": 71,
-            "mismatchFlags": ["Color differs between listing and user-uploaded photos"],
-            "confidence": 0.65,
-            "modelMeta": {
-                "modelId": llm_result.model_id,
-                "fallbackUsed": llm_result.fallback_used,
-                "fallbackReason": llm_result.fallback_reason,
-            },
+        evidence_refs = constraints.get("visualEvidence", []) or []
+        if len(evidence_refs) == 0:
+            payload = VisualInsight(
+                status="NEED_MORE_EVIDENCE",
+                authenticityScore=48,
+                mismatchFlags=[],
+                visualRisks=["No user-provided image evidence available for cross-check."],
+                confidence=0.35,
+                requiredEvidence=[
+                    "At least one user photo from real usage context.",
+                    "One close-up product texture image.",
+                ],
+                evidenceRefs=[],
+            )
+        else:
+            payload = VisualInsight(
+                status="OK",
+                authenticityScore=74,
+                mismatchFlags=["Minor color mismatch between listing and user photo."],
+                visualRisks=[],
+                confidence=0.67,
+                requiredEvidence=[],
+                evidenceRefs=[str(item) for item in evidence_refs],
+            )
+
+        output = payload.model_dump(by_alias=True)
+        output["modelMeta"] = {
+            "modelId": llm_result.model_id,
+            "fallbackUsed": llm_result.fallback_used,
+            "fallbackReason": llm_result.fallback_reason,
         }
+        return output
 
 
 class PriceLogisticsAgent:
-    def __init__(self, model_router: ModelRouter) -> None:
+    def __init__(
+        self,
+        model_router: ModelRouter,
+        ui_executor: UIExecutor,
+        stop_before_pay: bool,
+    ) -> None:
         self._model_router = model_router
+        self._ui_executor = ui_executor
+        self._stop_before_pay = stop_before_pay
 
     async def run(self, constraints: dict[str, Any]) -> dict[str, Any]:
+        consent_autofill = bool(constraints.get("consentAutofill", False))
+        execution_result = await self._ui_executor.execute(
+            UIExecutionRequest(
+                constraints=constraints,
+                consent_autofill=consent_autofill,
+                stop_before_pay=self._stop_before_pay,
+            )
+        )
+        validated_output = PriceLogisticsOutput.model_validate(
+            execution_result.to_public_dict()
+        )
+
         llm_result = await self._model_router.call(
             task_type="price_logistics",
-            payload={"prompt": f"Compare pricing and delivery for {constraints}"},
-        )
-        return {
-            "candidates": [
-                {
-                    "title": "ErgoFlex Dorm Chair",
-                    "sourceUrl": "https://example.com/product/ergoflex-chair",
-                    "price": 139.99,
-                    "rating": 4.4,
-                    "shippingETA": "2-4 days",
-                    "returnPolicy": "30-day return",
-                    "checkoutReady": False,
-                },
-                {
-                    "title": "CampusComfort Mesh Chair",
-                    "sourceUrl": "https://example.com/product/campuscomfort-chair",
-                    "price": 124.99,
-                    "rating": 4.1,
-                    "shippingETA": "5-7 days",
-                    "returnPolicy": "14-day return",
-                    "checkoutReady": False,
-                }
-            ],
-            "executionTrace": [
-                "Opened storefront",
-                "Compared shipping options",
-                "Stopped before payment step",
-            ],
-            "modelMeta": {
-                "modelId": llm_result.model_id,
-                "fallbackUsed": llm_result.fallback_used,
-                "fallbackReason": llm_result.fallback_reason,
+            payload={
+                "prompt": (
+                    "Compare pricing and delivery from executor output. "
+                    f"constraints={constraints}, blockers={validated_output.blockers}"
+                )
             },
+        )
+
+        response = validated_output.model_dump(by_alias=True)
+        response["modelMeta"] = {
+            "modelId": llm_result.model_id,
+            "fallbackUsed": llm_result.fallback_used,
+            "fallbackReason": llm_result.fallback_reason,
         }
+        return response
 
 
 class DecisionAgent:
