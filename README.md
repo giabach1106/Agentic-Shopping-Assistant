@@ -60,7 +60,11 @@ pytest -q
 
 - If Redis is not running locally, backend will fall back to in-memory checkpoints and show a warning at startup.
 - To remove that warning in local non-docker mode, run Redis and set `AGENT_REDIS_URL=redis://localhost:6379/0`.
-- RAG defaults to `inmemory` for local development. Set `RAG_BACKEND=bedrock_kb` and `BEDROCK_KB_ID=<your_kb_id>` to use Bedrock Knowledge Bases.
+- RAG defaults to `inmemory` for local development.
+- Set `RAG_BACKEND=chroma` to use local persistent Chroma storage (`RAG_CHROMA_PATH`).
+- Set `RAG_BACKEND=bedrock_kb` and `BEDROCK_KB_ID=<your_kb_id>` to use Bedrock Knowledge Bases.
+- Ingest local corpus example:
+  `python backend/scripts/ingest_local_corpus.py --input backend/data/reviews.sample.jsonl`
 
 ### Useful API endpoints
 

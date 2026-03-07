@@ -26,6 +26,8 @@ def test_settings(tmp_path: Path) -> Settings:
         mock_model=True,
         rag_backend="inmemory",
         rag_top_k=5,
+        rag_chroma_path=tmp_path / "chroma",
+        rag_collection_name="shopping_reviews_test",
         ui_executor_backend="mock",
         stop_before_pay=True,
     )

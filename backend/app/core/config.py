@@ -27,6 +27,8 @@ class Settings:
     mock_model: bool
     rag_backend: str
     rag_top_k: int
+    rag_chroma_path: Path
+    rag_collection_name: str
     ui_executor_backend: str
     stop_before_pay: bool
 
@@ -58,6 +60,10 @@ class Settings:
             mock_model=_as_bool(os.getenv("MOCK_MODEL"), default=True),
             rag_backend=os.getenv("RAG_BACKEND", "inmemory"),
             rag_top_k=int(os.getenv("RAG_TOP_K", "5")),
+            rag_chroma_path=Path(
+                os.getenv("RAG_CHROMA_PATH", str(backend_root / "data" / "chroma"))
+            ),
+            rag_collection_name=os.getenv("RAG_COLLECTION_NAME", "shopping_reviews"),
             ui_executor_backend=os.getenv("UI_EXECUTOR_BACKEND", "mock"),
             stop_before_pay=_as_bool(os.getenv("STOP_BEFORE_PAY"), default=True),
         )

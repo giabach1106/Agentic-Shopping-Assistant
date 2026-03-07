@@ -14,7 +14,7 @@ from app.rag.base import RetrievalDocument, Retriever
 
 class InMemoryRetriever:
     def __init__(self, seed_documents: list[RetrievalDocument]) -> None:
-        self._seed_documents = seed_documents
+        self._seed_documents = list(seed_documents)
 
     async def search(self, query: str, top_k: int) -> list[RetrievalDocument]:
         query_tokens = {token for token in query.lower().split() if token}
@@ -26,6 +26,88 @@ class InMemoryRetriever:
 
         scored_docs.sort(key=lambda item: item[0], reverse=True)
         return [doc for score, doc in scored_docs if score > 0][:top_k]
+
+    async def upsert_documents(self, documents: list[RetrievalDocument]) -> int:
+        existing_ids = {doc.doc_id for doc in self._seed_documents}
+        inserted = 0
+        for doc in documents:
+            if doc.doc_id in existing_ids:
+                continue
+            self._seed_documents.append(doc)
+            existing_ids.add(doc.doc_id)
+            inserted += 1
+        return inserted
+
+
+class ChromaAdapter:
+    def __init__(
+        self,
+        persist_path: str,
+        collection_name: str,
+        fallback_retriever: InMemoryRetriever,
+    ) -> None:
+        self._persist_path = persist_path
+        self._collection_name = collection_name
+        self._fallback_retriever = fallback_retriever
+        self._logger = logging.getLogger(self.__class__.__name__)
+        self._chroma_collection = None
+
+        try:
+            import chromadb  # type: ignore
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning(
+                "chromadb is unavailable (%r). Falling back to in-memory retriever.", exc
+            )
+            self._chroma_collection = None
+            return
+
+        client = chromadb.PersistentClient(path=self._persist_path)
+        self._chroma_collection = client.get_or_create_collection(
+            name=self._collection_name
+        )
+
+    async def search(self, query: str, top_k: int) -> list[RetrievalDocument]:
+        if self._chroma_collection is None:
+            return await self._fallback_retriever.search(query, top_k)
+
+        result = await asyncio.to_thread(
+            self._chroma_collection.query,
+            query_texts=[query],
+            n_results=top_k,
+        )
+        documents = result.get("documents", [[]])[0]
+        ids = result.get("ids", [[]])[0]
+        metadatas = result.get("metadatas", [[]])[0]
+
+        mapped: list[RetrievalDocument] = []
+        for idx, content in enumerate(documents):
+            metadata = metadatas[idx] if idx < len(metadatas) else {}
+            source = str(metadata.get("source", "chroma"))
+            mapped.append(
+                RetrievalDocument(
+                    doc_id=str(ids[idx]) if idx < len(ids) else f"chroma-{idx+1}",
+                    source=source,
+                    content=content,
+                    metadata=metadata,
+                )
+            )
+        return mapped
+
+    async def upsert_documents(self, documents: list[RetrievalDocument]) -> int:
+        inserted = await self._fallback_retriever.upsert_documents(documents)
+        if self._chroma_collection is None or len(documents) == 0:
+            return inserted
+
+        ids = [doc.doc_id for doc in documents]
+        contents = [doc.content for doc in documents]
+        metadatas = [dict({"source": doc.source}, **doc.metadata) for doc in documents]
+        await asyncio.to_thread(
+            self._chroma_collection.upsert,
+            ids=ids,
+            documents=contents,
+            metadatas=metadatas,
+        )
+        return inserted
 
 
 class BedrockKnowledgeBaseRetriever:
@@ -91,6 +173,12 @@ class HybridRAGService:
             "sourceStats": dict(source_counts),
         }
 
+    async def ingest_documents(self, documents: list[RetrievalDocument]) -> int:
+        upsert = getattr(self._retriever, "upsert_documents", None)
+        if callable(upsert):
+            return int(await upsert(documents))
+        return 0
+
     def _build_query(self, constraints: dict[str, Any]) -> str:
         category = constraints.get("category", "product")
         must_have = ", ".join(constraints.get("mustHave", []))
@@ -140,8 +228,13 @@ def build_rag_service(settings: Settings) -> HybridRAGService:
             region_name=settings.aws_region,
             fallback_retriever=local_retriever,
         )
+    elif backend == "chroma":
+        retriever = ChromaAdapter(
+            persist_path=str(settings.rag_chroma_path),
+            collection_name=settings.rag_collection_name,
+            fallback_retriever=local_retriever,
+        )
     else:
         retriever = local_retriever
 
     return HybridRAGService(retriever=retriever, top_k=settings.rag_top_k)
-

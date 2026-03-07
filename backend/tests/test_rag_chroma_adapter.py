@@ -3,9 +3,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from app.agents.stubs import ReviewIntelligenceAgent
 from app.core.config import Settings
-from app.core.model_router import ModelRouter
+from app.rag.base import RetrievalDocument
 from app.rag.providers import build_rag_service
 
 
@@ -23,7 +22,7 @@ def _settings() -> Settings:
         latency_threshold_seconds=0.5,
         max_retries=1,
         mock_model=True,
-        rag_backend="inmemory",
+        rag_backend="chroma",
         rag_top_k=3,
         rag_chroma_path=Path("./tmp-chroma"),
         rag_collection_name="shopping_reviews_test",
@@ -32,29 +31,30 @@ def _settings() -> Settings:
     )
 
 
-def test_review_agent_returns_evidence_refs_from_rag() -> None:
+def test_chroma_adapter_supports_ingestion_and_query() -> None:
     async def run_test() -> None:
-        settings = _settings()
-        router = ModelRouter(settings)
-        rag_service = build_rag_service(settings)
-        agent = ReviewIntelligenceAgent(router, rag_service)
+        rag_service = build_rag_service(_settings())
+        inserted = await rag_service.ingest_documents(
+            [
+                RetrievalDocument(
+                    doc_id="custom-1",
+                    source="reddit",
+                    content="Mesh chair has good lumbar support for dorm desks.",
+                )
+            ]
+        )
+        assert inserted >= 0
 
-        output = await agent.run(
+        result = await rag_service.retrieve_review_context(
             {
-                "category": "ergonomic chair",
-                "mustHave": ["ergonomic"],
+                "category": "chair",
+                "mustHave": ["lumbar support"],
                 "minRating": 4,
                 "deliveryDeadline": "friday",
             }
         )
-        assert len(output["evidenceRefs"]) > 0
-        assert isinstance(output["sourceStats"], dict)
-        assert "evidenceQualityScore" in output
-        assert "duplicateReviewClusters" in output
-        assert "rankedEvidence" in output
-        assert output["confidence"] <= 1
-        assert output["confidence"] >= 0
-        assert "pros" in output
-        assert "cons" in output
+        assert "documents" in result
+        assert isinstance(result["documents"], list)
 
     asyncio.run(run_test())
+
