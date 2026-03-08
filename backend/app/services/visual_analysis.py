@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass(slots=True)
 class VisualAnalysisResult:
-    status: str
+    status: Literal["OK", "NEED_MORE_EVIDENCE"]
     authenticity_score: int
     mismatch_flags: list[str]
     visual_risks: list[str]
@@ -66,4 +67,3 @@ class VisualEvidenceAnalyzer:
             required_evidence=[],
             evidence_refs=evidence_refs,
         )
-

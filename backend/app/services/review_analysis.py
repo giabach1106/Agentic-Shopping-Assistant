@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import TypedDict
 
 from app.rag.base import RetrievalDocument
 
@@ -38,6 +39,22 @@ class RankedEvidence:
     excerpt: str
 
 
+class DuplicateCluster(TypedDict):
+    canonicalDocId: str
+    members: list[str]
+    sources: list[str]
+    size: int
+
+
+class ReviewAnalysisResult(TypedDict):
+    rankedEvidence: list[RankedEvidence]
+    duplicateClusters: list[DuplicateCluster]
+    paidPromoLikelihood: float
+    averageQuality: float
+    uniqueEvidenceCount: int
+    rawEvidenceCount: int
+
+
 class ReviewEvidenceAnalyzer:
     _source_weights = {
         "amazon": 0.84,
@@ -53,7 +70,7 @@ class ReviewEvidenceAnalyzer:
         "commission",
     )
 
-    def analyze(self, documents: list[RetrievalDocument]) -> dict[str, object]:
+    def analyze(self, documents: list[RetrievalDocument]) -> ReviewAnalysisResult:
         clusters = self._cluster_duplicates(documents)
         unique_docs = [cluster[0] for cluster in clusters]
         ranked = sorted(
@@ -62,7 +79,7 @@ class ReviewEvidenceAnalyzer:
             reverse=True,
         )
 
-        duplicate_groups = [
+        duplicate_groups: list[DuplicateCluster] = [
             {
                 "canonicalDocId": cluster[0].doc_id,
                 "members": [member.doc_id for member in cluster],

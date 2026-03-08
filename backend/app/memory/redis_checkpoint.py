@@ -2,16 +2,30 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, Protocol, cast
 
 import redis.asyncio as redis
+
+
+class AsyncRedisClient(Protocol):
+    async def ping(self) -> bool:
+        """Check connectivity."""
+
+    async def aclose(self) -> None:
+        """Close open redis resources."""
+
+    async def set(self, name: str, value: str) -> bool:
+        """Write key/value entry."""
+
+    async def get(self, name: str) -> str | None:
+        """Read key/value entry."""
 
 
 class RedisCheckpointStore:
     def __init__(self, redis_url: str, key_prefix: str) -> None:
         self._redis_url = redis_url
         self._key_prefix = key_prefix
-        self._redis_client: redis.Redis | None = None
+        self._redis_client: AsyncRedisClient | None = None
         self._fallback_store: dict[str, str] = {}
         self._using_fallback = False
         self._logger = logging.getLogger(self.__class__.__name__)
@@ -22,7 +36,8 @@ class RedisCheckpointStore:
 
     async def connect(self) -> None:
         try:
-            self._redis_client = redis.Redis.from_url(self._redis_url, decode_responses=True)
+            client = redis.Redis.from_url(self._redis_url, decode_responses=True)
+            self._redis_client = cast(AsyncRedisClient, client)
             await self._redis_client.ping()
             self._using_fallback = False
         except Exception as exc:  # noqa: BLE001
@@ -78,4 +93,3 @@ class RedisCheckpointStore:
 
     def _checkpoint_key(self, session_id: str) -> str:
         return f"{self._key_prefix}:{session_id}"
-

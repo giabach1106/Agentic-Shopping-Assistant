@@ -3,13 +3,25 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import Counter
-from typing import Any
+from typing import Any, Protocol, TypedDict, cast, runtime_checkable
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import Settings
 from app.rag.base import RetrievalDocument, Retriever
+
+
+@runtime_checkable
+class SupportsUpsert(Protocol):
+    async def upsert_documents(self, documents: list[RetrievalDocument]) -> int:
+        """Insert or update retrieval documents."""
+
+
+class ReviewRetrievalContext(TypedDict):
+    query: str
+    documents: list[RetrievalDocument]
+    sourceStats: dict[str, int]
 
 
 class InMemoryRetriever:
@@ -70,14 +82,39 @@ class ChromaAdapter:
         if self._chroma_collection is None:
             return await self._fallback_retriever.search(query, top_k)
 
-        result = await asyncio.to_thread(
-            self._chroma_collection.query,
-            query_texts=[query],
-            n_results=top_k,
+        result = cast(
+            dict[str, Any],
+            await asyncio.to_thread(
+                self._chroma_collection.query,
+                query_texts=[query],
+                n_results=top_k,
+            ),
         )
-        documents = result.get("documents", [[]])[0]
-        ids = result.get("ids", [[]])[0]
-        metadatas = result.get("metadatas", [[]])[0]
+        documents_payload = result.get("documents", [[]])
+        ids_payload = result.get("ids", [[]])
+        metadatas_payload = result.get("metadatas", [[]])
+
+        documents = (
+            [str(item) for item in documents_payload[0]]
+            if isinstance(documents_payload, list)
+            and len(documents_payload) > 0
+            and isinstance(documents_payload[0], list)
+            else []
+        )
+        ids = (
+            [str(item) for item in ids_payload[0]]
+            if isinstance(ids_payload, list)
+            and len(ids_payload) > 0
+            and isinstance(ids_payload[0], list)
+            else []
+        )
+        metadatas: list[dict[str, Any]] = (
+            [item for item in metadatas_payload[0] if isinstance(item, dict)]
+            if isinstance(metadatas_payload, list)
+            and len(metadatas_payload) > 0
+            and isinstance(metadatas_payload[0], list)
+            else []
+        )
 
         mapped: list[RetrievalDocument] = []
         for idx, content in enumerate(documents):
@@ -124,11 +161,16 @@ class BedrockKnowledgeBaseRetriever:
 
     async def search(self, query: str, top_k: int) -> list[RetrievalDocument]:
         try:
-            response = await asyncio.to_thread(
-                self._client.retrieve,
-                knowledgeBaseId=self._knowledge_base_id,
-                retrievalQuery={"text": query},
-                retrievalConfiguration={"vectorSearchConfiguration": {"numberOfResults": top_k}},
+            response = cast(
+                dict[str, Any],
+                await asyncio.to_thread(
+                    self._client.retrieve,
+                    knowledgeBaseId=self._knowledge_base_id,
+                    retrievalQuery={"text": query},
+                    retrievalConfiguration={
+                        "vectorSearchConfiguration": {"numberOfResults": top_k}
+                    },
+                ),
             )
         except (BotoCoreError, ClientError, Exception) as exc:  # noqa: BLE001
             self._logger.warning(
@@ -137,9 +179,12 @@ class BedrockKnowledgeBaseRetriever:
             )
             return await self._fallback_retriever.search(query, top_k)
 
-        items = response.get("retrievalResults", [])
+        items_raw = response.get("retrievalResults", [])
+        items = items_raw if isinstance(items_raw, list) else []
         results: list[RetrievalDocument] = []
         for idx, item in enumerate(items):
+            if not isinstance(item, dict):
+                continue
             content = item.get("content", {}).get("text", "")
             location = item.get("location", {})
             source = (
@@ -163,7 +208,9 @@ class HybridRAGService:
         self._retriever = retriever
         self._top_k = top_k
 
-    async def retrieve_review_context(self, constraints: dict[str, Any]) -> dict[str, Any]:
+    async def retrieve_review_context(
+        self, constraints: dict[str, Any]
+    ) -> ReviewRetrievalContext:
         query = self._build_query(constraints)
         documents = await self._retriever.search(query, self._top_k)
         source_counts = Counter(doc.source for doc in documents)
@@ -174,9 +221,8 @@ class HybridRAGService:
         }
 
     async def ingest_documents(self, documents: list[RetrievalDocument]) -> int:
-        upsert = getattr(self._retriever, "upsert_documents", None)
-        if callable(upsert):
-            return int(await upsert(documents))
+        if isinstance(self._retriever, SupportsUpsert):
+            return int(await self._retriever.upsert_documents(documents))
         return 0
 
     def _build_query(self, constraints: dict[str, Any]) -> str:
