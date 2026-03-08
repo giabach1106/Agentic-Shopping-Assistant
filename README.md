@@ -36,6 +36,9 @@ This starts:
 - `backend` at `http://127.0.0.1:8000`
 - `redis` at `localhost:6379`
 
+Docker compose now loads variables from `.env` for backend (including `MOCK_MODEL`, model IDs, AWS region/credentials).  
+For local mock-only runs, keep `MOCK_MODEL=true`. For real Bedrock calls, set `MOCK_MODEL=false` in `.env`.
+
 ### Test with CLI chatbot
 
 ```bash
