@@ -55,6 +55,13 @@ Optional: pass existing session id.
 python scripts/chat_cli.py --session-id <SESSION_ID>
 ```
 
+Optional: inspect agent trace per turn.
+
+```bash
+python scripts/chat_cli.py --verbose
+python scripts/chat_cli.py --raw-state
+```
+
 ### Run tests
 
 ```bash

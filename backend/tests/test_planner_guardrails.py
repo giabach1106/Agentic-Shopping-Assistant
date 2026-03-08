@@ -77,3 +77,81 @@ def test_planner_stops_followup_after_cap() -> None:
         assert result["followUpQuestion"] is None
 
     asyncio.run(run_test())
+
+
+def test_planner_parses_numeric_budget_followup() -> None:
+    async def run_test() -> None:
+        router = ModelRouter(_settings())
+        planner = PlannerAgent(router)
+        existing = {
+            "category": "ergonomic chair",
+            "budgetMax": None,
+            "minRating": 4,
+            "deliveryDeadline": "friday",
+            "mustHave": ["ergonomic"],
+            "niceToHave": [],
+            "exclude": [],
+        }
+
+        result = await planner.run(
+            message="500",
+            history=[],
+            existing_constraints=existing,
+            follow_up_count=1,
+        )
+        assert result["constraints"]["budgetMax"] == 500
+        assert result["needsFollowUp"] is False
+
+    asyncio.run(run_test())
+
+
+def test_planner_accepts_generic_category_token() -> None:
+    async def run_test() -> None:
+        router = ModelRouter(_settings())
+        planner = PlannerAgent(router)
+        existing = {
+            "category": None,
+            "budgetMax": 150,
+            "minRating": 4,
+            "deliveryDeadline": "friday",
+            "mustHave": [],
+            "niceToHave": [],
+            "exclude": [],
+        }
+
+        result = await planner.run(
+            message="sport",
+            history=[],
+            existing_constraints=existing,
+            follow_up_count=1,
+        )
+        assert result["constraints"]["category"] == "sport"
+        assert result["needsFollowUp"] is False
+
+    asyncio.run(run_test())
+
+
+def test_planner_deadline_token_does_not_override_existing_category() -> None:
+    async def run_test() -> None:
+        router = ModelRouter(_settings())
+        planner = PlannerAgent(router)
+        existing = {
+            "category": "ergonomic chair",
+            "budgetMax": 150,
+            "minRating": 4,
+            "deliveryDeadline": None,
+            "mustHave": [],
+            "niceToHave": [],
+            "exclude": [],
+        }
+
+        result = await planner.run(
+            message="friday",
+            history=[],
+            existing_constraints=existing,
+            follow_up_count=2,
+        )
+        assert result["constraints"]["category"] == "ergonomic chair"
+        assert result["constraints"]["deliveryDeadline"] == "friday"
+
+    asyncio.run(run_test())

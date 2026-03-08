@@ -130,17 +130,71 @@ class PlannerAgent:
             category = "desk"
         elif "headphone" in lower:
             category = "headphones"
+        else:
+            stripped = lower.strip()
+            generic_category = re.fullmatch(
+                r"[a-z][a-z0-9-]{1,30}(?:\s+[a-z0-9-]{1,30})?",
+                stripped,
+            )
+            has_structured_signal = any(
+                token in stripped
+                for token in (
+                    "rating",
+                    "star",
+                    "under",
+                    "below",
+                    "budget",
+                    "price",
+                    "delivered",
+                    "delivery",
+                    "exclude",
+                    "autofill",
+                )
+            )
+            if generic_category and not has_structured_signal and stripped not in {
+                "hello",
+                "hi",
+                "hey",
+                "thanks",
+                "thank you",
+                "ok",
+                "okay",
+                "continue",
+                "today",
+                "tomorrow",
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday",
+                "sunday",
+            }:
+                category = stripped
 
         budget_match = re.search(r"(?:under|below|<=?)\s*\$?(\d+(?:\.\d+)?)", lower)
         budget_max = float(budget_match.group(1)) if budget_match else None
+        single_numeric_match = re.fullmatch(r"\$?\s*(\d+(?:\.\d+)?)", lower.strip())
+        single_numeric = float(single_numeric_match.group(1)) if single_numeric_match else None
+        if budget_max is None and single_numeric is not None and single_numeric > 5:
+            budget_max = single_numeric
 
         rating_match = re.search(r"(\d(?:\.\d)?)\+?\s*stars?", lower)
         min_rating = float(rating_match.group(1)) if rating_match else None
+        if min_rating is None and single_numeric is not None and 0 < single_numeric <= 5:
+            min_rating = single_numeric
         if min_rating is not None and min_rating > 5:
             min_rating = None
 
         deadline_match = re.search(r"delivered by\s+([a-z0-9 ,]+)", lower)
         delivery_deadline = deadline_match.group(1).strip() if deadline_match else None
+        if delivery_deadline is None:
+            direct_deadline_match = re.fullmatch(
+                r"(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+                lower.strip(),
+            )
+            if direct_deadline_match:
+                delivery_deadline = direct_deadline_match.group(1)
 
         must_have: list[str] = []
         if "ergonomic" in lower:
