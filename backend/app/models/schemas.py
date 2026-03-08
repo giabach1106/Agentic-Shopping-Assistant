@@ -17,7 +17,14 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     session_id: str = Field(alias="sessionId")
+    status: str
     reply: str
+    decision: dict[str, Any] | None = None
+    scientific_score: dict[str, Any] = Field(alias="scientificScore")
+    evidence_stats: dict[str, Any] = Field(alias="evidenceStats")
+    trace: list[dict[str, Any]]
+    missing_evidence: list[str] = Field(alias="missingEvidence")
+    blocking_agents: list[str] = Field(alias="blockingAgents")
     state: dict[str, Any]
 
 
@@ -44,13 +51,13 @@ class SessionSnapshotResponse(BaseModel):
 
 class RecommendationResponse(BaseModel):
     session_id: str = Field(alias="sessionId")
-    verdict: str
-    trust_score: float = Field(alias="trustScore")
-    confidence: float
-    selected_candidate: dict[str, Any] | None = Field(alias="selectedCandidate")
-    top_reasons: list[str] = Field(alias="topReasons")
-    risk_flags: list[str] = Field(alias="riskFlags")
-    score_breakdown: dict[str, Any] = Field(alias="scoreBreakdown")
+    status: str
+    decision: dict[str, Any] | None
+    scientific_score: dict[str, Any] = Field(alias="scientificScore")
+    evidence_stats: dict[str, Any] = Field(alias="evidenceStats")
+    trace: list[dict[str, Any]]
+    missing_evidence: list[str] = Field(alias="missingEvidence")
+    blocking_agents: list[str] = Field(alias="blockingAgents")
 
 
 class HealthResponse(BaseModel):

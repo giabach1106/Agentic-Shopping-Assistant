@@ -81,7 +81,14 @@ async def chat(request: Request, payload: ChatRequest) -> ChatResponse:
 
     return ChatResponse(
         sessionId=payload.session_id,
+        status=orchestration.status,
         reply=orchestration.reply,
+        decision=orchestration.decision,
+        scientificScore=orchestration.scientific_score,
+        evidenceStats=orchestration.evidence_stats,
+        trace=orchestration.trace,
+        missingEvidence=orchestration.missing_evidence,
+        blockingAgents=orchestration.blocking_agents,
         state=orchestration.state,
     )
 
@@ -130,7 +137,14 @@ async def resume_run(
 
     return ChatResponse(
         sessionId=session_id,
+        status=orchestration.status,
         reply=orchestration.reply,
+        decision=orchestration.decision,
+        scientificScore=orchestration.scientific_score,
+        evidenceStats=orchestration.evidence_stats,
+        trace=orchestration.trace,
+        missingEvidence=orchestration.missing_evidence,
+        blockingAgents=orchestration.blocking_agents,
         state=orchestration.state,
     )
 
@@ -172,13 +186,13 @@ async def get_recommendation(
 
     return RecommendationResponse(
         sessionId=session_id,
-        verdict=decision["verdict"],
-        trustScore=decision["trustScore"],
-        confidence=decision["confidence"],
-        selectedCandidate=decision.get("selectedCandidate"),
-        topReasons=decision.get("topReasons", []),
-        riskFlags=decision.get("riskFlags", []),
-        scoreBreakdown=decision.get("scoreBreakdown", {}),
+        status=decision.get("status", "ERROR"),
+        decision=decision.get("decision"),
+        scientificScore=decision.get("scientificScore", {}),
+        evidenceStats=decision.get("evidenceStats", {}),
+        trace=decision.get("trace", []),
+        missingEvidence=decision.get("missingEvidence", []),
+        blockingAgents=decision.get("blockingAgents", []),
     )
 
 
@@ -209,24 +223,26 @@ async def voice_consult(
             detail=f"Decision output is not available for session '{payload.session_id}'.",
         )
 
+    recommendation = decision.get("decision", {})
     model_result = await services.model_router.call(
         task_type="voice_consultation",
         payload={
             "prompt": (
                 "You are a concise shopping consultant. "
                 f"Question: {payload.question}. "
-                f"Current recommendation: verdict={decision.get('verdict')}, "
-                f"trustScore={decision.get('trustScore')}, "
-                f"topReasons={decision.get('topReasons')}, "
-                f"riskFlags={decision.get('riskFlags')}."
+                f"Current recommendation: verdict={recommendation.get('verdict')}, "
+                f"trustScore={recommendation.get('finalTrust')}, "
+                f"topReasons={recommendation.get('topReasons')}, "
+                f"riskFlags={recommendation.get('riskFlags')}."
             )
         },
         session_id=payload.session_id,
     )
 
     answer = (
-        f"[VoiceConsult] Verdict {decision.get('verdict')} "
-        f"(Trust {decision.get('trustScore')}): {model_result.output.get('text')}"
+        f"[VoiceConsult] Status {decision.get('status')} "
+        f"Verdict {recommendation.get('verdict')} "
+        f"(Trust {recommendation.get('finalTrust')}): {model_result.output.get('text')}"
     )
     return VoiceConsultResponse(
         sessionId=payload.session_id,

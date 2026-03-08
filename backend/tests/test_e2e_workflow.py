@@ -29,8 +29,11 @@ def test_e2e_complete_flow_with_full_query(client: TestClient) -> None:
     assert recommendation.status_code == 200
     payload = recommendation.json()
     assert payload["sessionId"] == session_id
-    assert payload["verdict"] in {"BUY", "WAIT", "AVOID"}
-    assert "scoreBreakdown" in payload
+    assert payload["status"] in {"OK", "NEED_DATA"}
+    assert "scientificScore" in payload
+    assert "evidenceStats" in payload
+    if payload["decision"] is not None:
+        assert payload["decision"]["verdict"] in {"BUY", "WAIT", "AVOID"}
 
 
 def test_e2e_missing_info_then_resume_to_decision(client: TestClient) -> None:
@@ -51,7 +54,11 @@ def test_e2e_missing_info_then_resume_to_decision(client: TestClient) -> None:
 
     recommendation = client.get(f"/v1/recommendations/{session_id}")
     assert recommendation.status_code == 200
-    assert recommendation.json()["verdict"] in {"BUY", "WAIT", "AVOID"}
+    payload = recommendation.json()
+    if payload["decision"] is not None:
+        assert payload["decision"]["verdict"] in {"BUY", "WAIT", "AVOID"}
+    else:
+        assert payload["status"] == "NEED_DATA"
 
 
 def test_e2e_automation_blocked_returns_graceful_risk_flag(client: TestClient) -> None:
@@ -71,6 +78,12 @@ def test_e2e_automation_blocked_returns_graceful_risk_flag(client: TestClient) -
     recommendation = client.get(f"/v1/recommendations/{session_id}")
     assert recommendation.status_code == 200
     payload = recommendation.json()
-    assert payload["verdict"] in {"WAIT", "AVOID"}
-    assert any("automation" in item.lower() for item in payload["riskFlags"])
-
+    if payload["decision"] is not None:
+        assert payload["decision"]["verdict"] in {"WAIT", "AVOID"}
+        assert any(
+            "automation" in item.lower()
+            for item in payload["decision"].get("riskFlags", [])
+        )
+    else:
+        assert payload["status"] == "NEED_DATA"
+        assert "price" in payload["blockingAgents"]

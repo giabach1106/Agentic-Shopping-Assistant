@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 
 from app.agents.stubs import ReviewIntelligenceAgent
+from app.collectors.realtime import build_realtime_collector
 from app.core.config import Settings
 from app.core.model_router import ModelRouter
 from app.rag.providers import build_rag_service
@@ -42,14 +43,18 @@ def test_review_agent_returns_evidence_refs_from_rag() -> None:
         router = ModelRouter(settings)
         rag_service = build_rag_service(settings)
         agent = ReviewIntelligenceAgent(router, rag_service)
+        collector = build_realtime_collector(settings)
+        constraints = {
+            "category": "ergonomic chair",
+            "mustHave": ["ergonomic"],
+            "minRating": 4,
+            "deliveryDeadline": "friday",
+        }
+        collection = (await collector.collect(constraints)).to_public_dict()
 
         output = await agent.run(
-            {
-                "category": "ergonomic chair",
-                "mustHave": ["ergonomic"],
-                "minRating": 4,
-                "deliveryDeadline": "friday",
-            }
+            constraints,
+            collection=collection,
         )
         assert len(output["evidenceRefs"]) > 0
         assert isinstance(output["sourceStats"], dict)

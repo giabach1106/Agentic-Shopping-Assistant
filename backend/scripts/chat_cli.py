@@ -132,11 +132,14 @@ def print_trace(payload: dict[str, Any], raw_state: bool) -> None:
 
     decision = outputs.get("decision")
     if isinstance(decision, dict):
+        decision_payload = decision.get("decision", {})
+        scientific_score = decision.get("scientificScore", {})
         print(
             "trace> decision "
-            f"verdict={decision.get('verdict')} "
-            f"trustScore={decision.get('trustScore')} "
-            f"confidence={decision.get('confidence')}"
+            f"status={decision.get('status')} "
+            f"verdict={decision_payload.get('verdict')} "
+            f"trustScore={decision_payload.get('finalTrust')} "
+            f"ratingReliability={scientific_score.get('ratingReliability')}"
         )
         _print_model_meta("decision", decision)
 

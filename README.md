@@ -41,6 +41,7 @@ For local mock-only runs, keep `MOCK_MODEL=true`. For real Bedrock calls, set `M
 Use Bedrock model IDs in the `amazon.nova-...` format (for example `amazon.nova-2-pro-v1:0`), not `us.amazon...`.
 Recommended local defaults in this repo are `amazon.nova-pro-v1:0` (default) and `amazon.nova-lite-v1:0` (fallback).
 If you switch to Nova 2 IDs, your AWS account may require an inference profile ARN instead of on-demand model IDs.
+For strict realtime/fail-closed behavior, set `RUNTIME_MODE=prod`, `MOCK_MODEL=false`, and use a realtime executor backend.
 
 ### Test with CLI chatbot
 
@@ -88,6 +89,15 @@ pytest -q
 - `GET /v1/recommendations/{session_id}`: latest decision payload for UI consumption
 - `GET /v1/metrics/runtime`: runtime telemetry (calls, fallback count, latency, estimated cost)
 - `POST /v1/voice/consult`: optional Sonic-style consultation (text-simulated voice response)
+
+### Break API response contract
+
+- `POST /v1/chat` and `GET /v1/recommendations/{session_id}` return:
+  - `status`: `OK | NEED_DATA | ERROR`
+  - `decision`: nullable (null when fail-closed)
+  - `scientificScore`: `ratingReliability`, `spamAuthenticity`, `absaAlignment`, `visualReliability`, `finalTrust`
+  - `evidenceStats`: `sourceCoverage`, `freshnessSeconds`, `reviewCount`, `ratingCount`, `missingFields`
+  - `trace`, `missingEvidence`, `blockingAgents`
 
 ### Demo utilities
 

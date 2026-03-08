@@ -266,7 +266,10 @@ def default_seed_documents() -> list[RetrievalDocument]:
 
 
 def build_rag_service(settings: Settings) -> HybridRAGService:
-    local_retriever = InMemoryRetriever(default_seed_documents())
+    use_seed = not (
+        settings.runtime_mode == "prod" and not settings.allow_dev_fallback_in_prod
+    )
+    local_retriever = InMemoryRetriever(default_seed_documents() if use_seed else [])
     backend = settings.rag_backend.lower().strip()
     if backend == "bedrock_kb" and settings.aws_bedrock_kb_id:
         retriever: Retriever = BedrockKnowledgeBaseRetriever(

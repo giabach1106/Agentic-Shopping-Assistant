@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from app.agents.stubs import (
     DecisionAgent,
+    EvidenceCollectionAgent,
     PlannerAgent,
     PriceLogisticsAgent,
     ReviewIntelligenceAgent,
@@ -22,27 +23,33 @@ from app.memory.sqlite_store import SQLiteSessionStore
 from app.orchestrator.graph import AgentOrchestrator
 from app.rag.providers import build_rag_service
 from app.tools.ui_executor import build_ui_executor
+from app.collectors.realtime import build_realtime_collector
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     configure_logging()
     resolved_settings = settings or Settings.from_env()
     rag_service = build_rag_service(resolved_settings)
+    realtime_collector = build_realtime_collector(resolved_settings)
 
     model_router = ModelRouter(resolved_settings)
     ui_executor = build_ui_executor(resolved_settings, model_router)
     planner = PlannerAgent(model_router)
+    collect = EvidenceCollectionAgent(resolved_settings, realtime_collector)
     review = ReviewIntelligenceAgent(model_router, rag_service)
     visual = VisualVerificationAgent(model_router)
     price = PriceLogisticsAgent(
         model_router=model_router,
         ui_executor=ui_executor,
         stop_before_pay=resolved_settings.stop_before_pay,
+        runtime_mode=resolved_settings.runtime_mode,
+        ui_executor_backend=resolved_settings.ui_executor_backend,
     )
-    decision = DecisionAgent(model_router)
+    decision = DecisionAgent(model_router, resolved_settings)
 
     orchestrator = AgentOrchestrator(
         planner=planner,
+        collect=collect,
         review=review,
         visual=visual,
         price=price,
@@ -60,6 +67,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings=resolved_settings,
         model_router=model_router,
         rag_service=rag_service,
+        realtime_collector=realtime_collector,
         ui_executor=ui_executor,
         session_service=session_service,
         orchestrator=orchestrator,

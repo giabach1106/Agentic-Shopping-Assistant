@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import json
 import re
+from statistics import mean
 from typing import Any
 
+from app.collectors.base import RealtimeCollector
+from app.core.config import Settings
 from app.core.model_router import ModelRouter
 from app.models.agent_outputs import PriceLogisticsOutput, VisualInsight
 from app.models.planner import SearchConstraints
+from app.rag.base import RetrievalDocument
 from app.rag.providers import HybridRAGService
 from app.services.review_analysis import ReviewEvidenceAnalyzer
 from app.services.trust_scoring import TrustScoringEngine
@@ -27,8 +32,27 @@ class PlannerAgent:
         follow_up_count: int = 0,
         session_id: str | None = None,
     ) -> dict[str, Any]:
-        del history  # history is wired for future planner upgrades.
-        extracted = self._extract_constraints(message)
+        del history
+
+        llm_result = await self._model_router.call(
+            task_type="planner",
+            payload={
+                "prompt": (
+                    "Extract strict shopping constraints as JSON with keys "
+                    "category,budgetMax,minRating,deliveryDeadline,mustHave,niceToHave,"
+                    "exclude,consentAutofill,visualEvidence. "
+                    f"User message: {message}"
+                )
+            },
+            session_id=session_id,
+        )
+
+        llm_extracted = self._extract_constraints_from_llm_text(
+            str(llm_result.output.get("text") or "")
+        )
+        regex_extracted = self._extract_constraints_regex(message)
+        extracted = self._merge_constraints(regex_extracted, llm_extracted)
+
         merged = self._merge_constraints(existing_constraints or {}, extracted)
         constraints = SearchConstraints.model_validate(merged)
         constraints_dict = constraints.to_public_dict()
@@ -39,17 +63,6 @@ class PlannerAgent:
             if constraints_dict.get(field) in (None, "", [])
         ]
         needs_follow_up = len(missing_fields) > 0 and follow_up_count < 4
-
-        llm_result = await self._model_router.call(
-            task_type="planner",
-            payload={
-                "prompt": (
-                    "Convert shopping intent into structured constraints. "
-                    f"User message: {message}"
-                )
-            },
-            session_id=session_id,
-        )
 
         inferred_fields = [
             field
@@ -82,6 +95,37 @@ class PlannerAgent:
                 "latencySeconds": llm_result.latency_seconds,
             },
         }
+
+    def _extract_constraints_from_llm_text(self, text: str) -> dict[str, Any]:
+        if not text:
+            return {}
+
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            match = re.search(r"\{[\s\S]*\}", text)
+            if not match:
+                return {}
+            try:
+                payload = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                return {}
+
+        if not isinstance(payload, dict):
+            return {}
+
+        allowed = {
+            "category",
+            "budgetMax",
+            "minRating",
+            "deliveryDeadline",
+            "mustHave",
+            "niceToHave",
+            "exclude",
+            "consentAutofill",
+            "visualEvidence",
+        }
+        return {key: value for key, value in payload.items() if key in allowed}
 
     def _build_follow_up_question(self, missing_field: str) -> str:
         question_map = {
@@ -121,7 +165,7 @@ class PlannerAgent:
                 merged.append(text)
         return merged
 
-    def _extract_constraints(self, message: str) -> dict[str, Any]:
+    def _extract_constraints_regex(self, message: str) -> dict[str, Any]:
         lower = message.lower()
         category = None
         if "chair" in lower:
@@ -220,7 +264,16 @@ class PlannerAgent:
             )
 
         visual_evidence: list[str] = []
-        if any(phrase in lower for phrase in ("uploaded photo", "uploaded image", "my room photo", "image attached", "photo attached")):
+        if any(
+            phrase in lower
+            for phrase in (
+                "uploaded photo",
+                "uploaded image",
+                "my room photo",
+                "image attached",
+                "photo attached",
+            )
+        ):
             visual_evidence.append("user-upload-1")
         if "blurry" in lower:
             visual_evidence.append("blurry-evidence")
@@ -244,6 +297,27 @@ class PlannerAgent:
         }
 
 
+class EvidenceCollectionAgent:
+    def __init__(self, settings: Settings, collector: RealtimeCollector) -> None:
+        self._settings = settings
+        self._collector = collector
+
+    async def run(self, constraints: dict[str, Any]) -> dict[str, Any]:
+        result = await self._collector.collect(constraints)
+        payload = result.to_public_dict()
+        source_coverage = len({item["source"] for item in payload["reviews"]})
+        status = "OK"
+        if self._settings.runtime_mode == "prod" and payload["missingEvidence"]:
+            status = "NEED_DATA"
+        return {
+            "status": status,
+            "sourceCoverage": source_coverage,
+            "missingEvidence": payload["missingEvidence"],
+            "blockedSources": payload["blockedSources"],
+            "collection": payload,
+        }
+
+
 class ReviewIntelligenceAgent:
     def __init__(self, model_router: ModelRouter, rag_service: HybridRAGService) -> None:
         self._model_router = model_router
@@ -253,12 +327,57 @@ class ReviewIntelligenceAgent:
     async def run(
         self,
         constraints: dict[str, Any],
+        collection: dict[str, Any] | None = None,
         session_id: str | None = None,
     ) -> dict[str, Any]:
+        collection = collection or {}
+        reviews = collection.get("reviews", []) if isinstance(collection, dict) else []
+        products = collection.get("products", []) if isinstance(collection, dict) else []
+
+        docs = [
+            RetrievalDocument(
+                doc_id=str(item.get("evidence_id") or item.get("review_id") or "review"),
+                source=str(item.get("source") or "unknown"),
+                content=str(item.get("review_text") or "").strip(),
+                metadata={
+                    "helpfulVotes": int(item.get("helpful_votes") or 0),
+                    "rating": float(item.get("rating") or 0.0),
+                },
+            )
+            for item in reviews
+            if str(item.get("review_text") or "").strip()
+        ]
+
+        if not docs:
+            return {
+                "status": "NEED_DATA",
+                "pros": [],
+                "cons": [],
+                "riskFlags": ["No live review corpus available for analysis."],
+                "paidPromoLikelihood": 1.0,
+                "confidence": 0.0,
+                "sourceStats": {},
+                "evidenceRefs": [],
+                "evidenceQualityScore": 0.0,
+                "duplicateReviewClusters": [],
+                "rankedEvidence": [],
+                "reviewCount": 0,
+                "ratingSummary": {
+                    "avgRating": 0.0,
+                    "ratingCount": 0,
+                    "positiveCount": 0,
+                    "positiveRate": 0.0,
+                },
+                "absaSignals": {},
+                "modelMeta": {
+                    "modelId": "none",
+                    "fallbackUsed": False,
+                    "fallbackReason": "review corpus unavailable",
+                },
+            }
+
         retrieval = await self._rag_service.retrieve_review_context(constraints)
-        documents = retrieval["documents"]
-        source_stats = retrieval["sourceStats"]
-        analysis = self._evidence_analyzer.analyze(documents)
+        analysis = self._evidence_analyzer.analyze(docs)
         ranked_evidence = analysis["rankedEvidence"]
         evidence_refs = [item.doc_id for item in ranked_evidence]
         promo_likelihood = float(analysis["paidPromoLikelihood"])
@@ -268,32 +387,76 @@ class ReviewIntelligenceAgent:
             task_type="review_intelligence",
             payload={
                 "prompt": (
-                    f"Analyze review quality for {constraints}. "
-                    f"Use evidence: {[doc.content for doc in documents]}"
+                    "Summarize review strengths and weaknesses strictly from provided corpus. "
+                    f"constraints={constraints}, reviewCount={len(docs)}"
                 )
             },
             session_id=session_id,
         )
 
-        pros = ["Comfortable for long study sessions", "Good value for price"]
-        if any("warranty" in item.excerpt.lower() for item in ranked_evidence):
-            pros.append("Community feedback includes practical durability checks.")
+        positives = [doc for doc in docs if float(doc.metadata.get("rating") or 0) >= 4]
+        negatives = [doc for doc in docs if float(doc.metadata.get("rating") or 0) < 4]
+        pros = [item.content[:140] for item in positives[:3]]
+        cons = [item.content[:140] for item in negatives[:3]]
 
-        cons = ["Assembly time can be long", "Armrest durability varies"]
-        if any("wobble" in item.excerpt.lower() for item in ranked_evidence):
-            cons.append("Lower-end variants may wobble after long-term use.")
+        source_stats: dict[str, int] = {}
+        for review in reviews:
+            source = str(review.get("source") or "unknown")
+            source_stats[source] = source_stats.get(source, 0) + 1
 
-        risk_flags = []
-        if "tiktok" in source_stats:
-            risk_flags.append("Contains creator-sourced opinions; verify sponsorship tags.")
+        rating_count = sum(int(item.get("rating_count") or 0) for item in products)
+        avg_rating = 0.0
+        if rating_count > 0:
+            weighted_sum = sum(
+                float(item.get("avg_rating") or 0.0) * int(item.get("rating_count") or 0)
+                for item in products
+            )
+            avg_rating = round(weighted_sum / rating_count, 3)
+        else:
+            ratings = [
+                float(item.get("rating") or 0.0)
+                for item in reviews
+                if item.get("rating") is not None
+            ]
+            avg_rating = round(mean(ratings), 3) if ratings else 0.0
+            rating_count = len(ratings)
+
+        positive_count = sum(1 for item in reviews if float(item.get("rating") or 0.0) >= 4)
+        positive_rate = round((positive_count / max(1, len(reviews))), 4)
+
+        risk_flags: list[str] = []
         if promo_likelihood >= 0.5:
-            risk_flags.append("High affiliate/sponsored signal ratio in retrieved evidence.")
+            risk_flags.append("High affiliate/sponsored signal ratio in review corpus.")
         if analysis["duplicateClusters"]:
             risk_flags.append("Duplicate review narratives detected across sources.")
-        if len(evidence_refs) == 0:
+        if len(evidence_refs) < 2:
             risk_flags.append("Low evidence coverage across sources.")
 
+        aspects = {
+            "comfort": 0.0,
+            "durability": 0.0,
+            "assembly": 0.0,
+            "price": 0.0,
+            "delivery": 0.0,
+            "return": 0.0,
+        }
+        keywords = {
+            "comfort": ("comfort", "back", "lumbar", "seat"),
+            "durability": ("durable", "wobble", "break", "sturdy"),
+            "assembly": ("assembly", "assemble", "screw", "manual"),
+            "price": ("price", "value", "expensive", "cheap"),
+            "delivery": ("ship", "delivery", "arrive", "late"),
+            "return": ("return", "refund", "policy"),
+        }
+        for aspect, tokens in keywords.items():
+            hits = [doc for doc in docs if any(token in doc.content.lower() for token in tokens)]
+            if not hits:
+                continue
+            avg = mean(float(doc.metadata.get("rating") or 0.0) for doc in hits)
+            aspects[aspect] = round((avg - 3.0) / 2.0, 3)
+
         return {
+            "status": "OK",
             "pros": pros,
             "cons": cons,
             "riskFlags": risk_flags,
@@ -313,6 +476,19 @@ class ReviewIntelligenceAgent:
                 }
                 for item in ranked_evidence
             ],
+            "retrievalContext": {
+                "query": retrieval["query"],
+                "documents": [doc.doc_id for doc in retrieval["documents"]],
+                "sourceStats": retrieval["sourceStats"],
+            },
+            "reviewCount": len(reviews),
+            "ratingSummary": {
+                "avgRating": avg_rating,
+                "ratingCount": rating_count,
+                "positiveCount": positive_count,
+                "positiveRate": positive_rate,
+            },
+            "absaSignals": aspects,
             "modelMeta": {
                 "modelId": llm_result.model_id,
                 "fallbackUsed": llm_result.fallback_used,
@@ -329,6 +505,7 @@ class VisualVerificationAgent:
     async def run(
         self,
         constraints: dict[str, Any],
+        collection: dict[str, Any],
         session_id: str | None = None,
     ) -> dict[str, Any]:
         llm_result = await self._model_router.call(
@@ -336,7 +513,11 @@ class VisualVerificationAgent:
             payload={"prompt": f"Evaluate image authenticity for {constraints}"},
             session_id=session_id,
         )
-        evidence_refs = [str(item) for item in constraints.get("visualEvidence", []) or []]
+        extra_refs = [str(item) for item in constraints.get("visualEvidence", []) or []]
+        visuals = collection.get("visuals", []) if isinstance(collection, dict) else []
+        collected_refs = [str(item.get("evidence_id")) for item in visuals if item.get("evidence_id")]
+        evidence_refs = [*collected_refs, *extra_refs]
+
         analysis = self._visual_analyzer.analyze(evidence_refs)
         payload = VisualInsight(
             status=analysis.status,
@@ -349,6 +530,7 @@ class VisualVerificationAgent:
         )
 
         output = payload.model_dump(by_alias=True)
+        output["visualCount"] = len(visuals)
         output["modelMeta"] = {
             "modelId": llm_result.model_id,
             "fallbackUsed": llm_result.fallback_used,
@@ -363,14 +545,19 @@ class PriceLogisticsAgent:
         model_router: ModelRouter,
         ui_executor: UIExecutor,
         stop_before_pay: bool,
+        runtime_mode: str,
+        ui_executor_backend: str,
     ) -> None:
         self._model_router = model_router
         self._ui_executor = ui_executor
         self._stop_before_pay = stop_before_pay
+        self._runtime_mode = runtime_mode
+        self._ui_executor_backend = ui_executor_backend
 
     async def run(
         self,
         constraints: dict[str, Any],
+        collection: dict[str, Any],
         session_id: str | None = None,
     ) -> dict[str, Any]:
         consent_autofill = bool(constraints.get("consentAutofill", False))
@@ -381,15 +568,69 @@ class PriceLogisticsAgent:
                 stop_before_pay=self._stop_before_pay,
             )
         )
+
+        candidates: list[dict[str, Any]] = []
+        if isinstance(collection, dict):
+            for item in collection.get("products", []):
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("url") or "").strip()
+                if not url.startswith("http"):
+                    continue
+                candidates.append(
+                    {
+                        "title": str(item.get("title") or "unknown product"),
+                        "sourceUrl": url,
+                        "price": float(item.get("price") or 1.0),
+                        "rating": float(item.get("avg_rating") or 0.0),
+                        "shippingETA": str(item.get("shipping_eta") or "unknown"),
+                        "returnPolicy": str(item.get("return_policy") or "unknown"),
+                        "checkoutReady": False,
+                        "evidenceRefs": [str(item.get("evidence_id") or "")],
+                    }
+                )
+
+        if self._runtime_mode != "prod" and len(candidates) == 0:
+            candidates = execution_result.to_public_dict().get("candidates", [])
+
+        blockers = list(execution_result.blockers)
+        if self._runtime_mode == "prod" and self._ui_executor_backend == "mock":
+            blockers.append("executor_not_realtime")
+        if self._runtime_mode == "prod" and len(candidates) == 0:
+            blockers.append("missing_realtime_products")
+
+        trace = execution_result.to_public_dict().get("executionTrace", [])
+        if isinstance(collection, dict):
+            collect_trace = collection.get("trace", [])
+            if isinstance(collect_trace, list):
+                trace = [
+                    *[
+                        {
+                            "step": f"collect::{str(item.get('step') or 'unknown')}",
+                            "status": str(item.get("status") or "warning"),
+                            "detail": str(item.get("detail") or ""),
+                        }
+                        for item in collect_trace
+                        if isinstance(item, dict)
+                    ],
+                    *trace,
+                ]
+
         validated_output = PriceLogisticsOutput.model_validate(
-            execution_result.to_public_dict()
+            {
+                "candidates": candidates,
+                "executionTrace": trace,
+                "blockers": blockers,
+                "consentAutofill": consent_autofill,
+                "stopBeforePay": self._stop_before_pay,
+            }
         )
 
         llm_result = await self._model_router.call(
             task_type="price_logistics",
             payload={
                 "prompt": (
-                    "Compare pricing and delivery from executor output. "
+                    "Compare pricing and delivery from realtime executor output. "
                     f"constraints={constraints}, blockers={validated_output.blockers}"
                 )
             },
@@ -397,6 +638,7 @@ class PriceLogisticsAgent:
         )
 
         response = validated_output.model_dump(by_alias=True)
+        response["status"] = "NEED_DATA" if blockers else "OK"
         response["modelMeta"] = {
             "modelId": llm_result.model_id,
             "fallbackUsed": llm_result.fallback_used,
@@ -406,9 +648,9 @@ class PriceLogisticsAgent:
 
 
 class DecisionAgent:
-    def __init__(self, model_router: ModelRouter) -> None:
+    def __init__(self, model_router: ModelRouter, settings: Settings) -> None:
         self._model_router = model_router
-        self._scoring_engine = TrustScoringEngine()
+        self._scoring_engine = TrustScoringEngine(settings=settings)
 
     async def run(
         self,
@@ -418,7 +660,7 @@ class DecisionAgent:
     ) -> dict[str, Any]:
         llm_result = await self._model_router.call(
             task_type="decision",
-            payload={"prompt": "Create BUY/WAIT/AVOID recommendation from input signals."},
+            payload={"prompt": "Create recommendation from scientific trust signals."},
             session_id=session_id,
         )
 
@@ -427,18 +669,10 @@ class DecisionAgent:
             constraints=constraints or {},
         )
 
-        return {
-            "trustScore": scoring_result.trust_score,
-            "verdict": scoring_result.verdict,
-            "topReasons": scoring_result.top_reasons,
-            "riskFlags": scoring_result.risk_flags,
-            "confidence": scoring_result.confidence,
-            "whyRankedHere": scoring_result.why_ranked_here,
-            "scoreBreakdown": scoring_result.score_breakdown,
-            "selectedCandidate": scoring_result.selected_candidate,
-            "modelMeta": {
-                "modelId": llm_result.model_id,
-                "fallbackUsed": llm_result.fallback_used,
-                "fallbackReason": llm_result.fallback_reason,
-            },
+        output = scoring_result.to_public_dict()
+        output["modelMeta"] = {
+            "modelId": llm_result.model_id,
+            "fallbackUsed": llm_result.fallback_used,
+            "fallbackReason": llm_result.fallback_reason,
         }
+        return output

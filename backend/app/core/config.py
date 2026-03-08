@@ -35,6 +35,14 @@ class Settings:
     max_estimated_cost_per_session_usd: float
     estimated_cost_per_call_pro_usd: float
     estimated_cost_per_call_lite_usd: float
+    runtime_mode: str = "dev"
+    min_review_count: int = 5
+    min_rating_count: int = 20
+    min_source_coverage: int = 3
+    bayesian_prior_mean: float = 4.0
+    bayesian_prior_strength: int = 50
+    wilson_confidence_z: float = 1.96
+    allow_dev_fallback_in_prod: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -81,5 +89,15 @@ class Settings:
             ),
             estimated_cost_per_call_lite_usd=float(
                 os.getenv("ESTIMATED_COST_PER_CALL_LITE_USD", "0.004")
+            ),
+            runtime_mode=os.getenv("RUNTIME_MODE", "dev").strip().lower(),
+            min_review_count=int(os.getenv("MIN_REVIEW_COUNT", "5")),
+            min_rating_count=int(os.getenv("MIN_RATING_COUNT", "20")),
+            min_source_coverage=int(os.getenv("MIN_SOURCE_COVERAGE", "3")),
+            bayesian_prior_mean=float(os.getenv("BAYESIAN_PRIOR_MEAN", "4.0")),
+            bayesian_prior_strength=int(os.getenv("BAYESIAN_PRIOR_STRENGTH", "50")),
+            wilson_confidence_z=float(os.getenv("WILSON_CONFIDENCE_Z", "1.96")),
+            allow_dev_fallback_in_prod=_as_bool(
+                os.getenv("ALLOW_DEV_FALLBACK_IN_PROD"), default=False
             ),
         )

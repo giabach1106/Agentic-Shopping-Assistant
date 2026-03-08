@@ -25,7 +25,9 @@ def test_recommendation_endpoint_returns_decision_payload(client: TestClient) ->
     payload = recommendation.json()
 
     assert payload["sessionId"] == session_id
-    assert payload["verdict"] in {"BUY", "WAIT", "AVOID"}
-    assert isinstance(payload["trustScore"], float | int)
-    assert "scoreBreakdown" in payload
-
+    assert payload["status"] in {"OK", "NEED_DATA"}
+    assert "scientificScore" in payload
+    assert "evidenceStats" in payload
+    assert isinstance(payload["scientificScore"].get("finalTrust"), float | int)
+    if payload["decision"] is not None:
+        assert payload["decision"]["verdict"] in {"BUY", "WAIT", "AVOID"}
