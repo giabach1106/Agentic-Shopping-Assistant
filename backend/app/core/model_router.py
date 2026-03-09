@@ -116,8 +116,9 @@ class ModelRouter:
         task_type: str,
         payload: dict[str, Any],
     ) -> ModelCallResult:
+        attempts = max(1, int(self._settings.max_retries))
         last_error: Exception | None = None
-        for attempt in range(1, self._settings.max_retries + 1):
+        for attempt in range(1, attempts + 1):
             try:
                 return await self._invoke_with_timing(model_id, task_type, payload)
             except Exception as exc:  # noqa: BLE001
@@ -125,12 +126,15 @@ class ModelRouter:
                 self._logger.warning(
                     "Model invocation attempt %d/%d failed for %s (%s): %r",
                     attempt,
-                    self._settings.max_retries,
+                    attempts,
                     task_type,
                     model_id,
                     exc,
                 )
-        assert last_error is not None
+        if last_error is None:
+            raise RuntimeError(
+                f"Model invocation failed for {task_type} ({model_id}) with no captured error."
+            )
         raise last_error
 
     async def _invoke_with_timing(

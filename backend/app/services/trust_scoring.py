@@ -278,11 +278,15 @@ class TrustScoringEngine:
 
         now = datetime.now(UTC)
         max_age = 0
+        parsed_any = False
         for item in all_records:
             dt = _safe_dt(str(item.get("retrieved_at") or item.get("retrievedAt") or ""))
             if dt is None:
                 continue
+            parsed_any = True
             max_age = max(max_age, int((now - dt).total_seconds()))
+        if not parsed_any:
+            return 999999
         return max_age
 
     def _select_candidate(self, price: dict[str, Any]) -> dict[str, Any] | None:

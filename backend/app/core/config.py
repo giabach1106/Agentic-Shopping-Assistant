@@ -68,7 +68,7 @@ class Settings:
             latency_threshold_seconds=float(
                 os.getenv("MODEL_LATENCY_THRESHOLD_SECONDS", "6")
             ),
-            max_retries=int(os.getenv("MODEL_MAX_RETRIES", "2")),
+            max_retries=max(1, int(os.getenv("MODEL_MAX_RETRIES", "2"))),
             mock_model=_as_bool(os.getenv("MOCK_MODEL"), default=True),
             rag_backend=os.getenv("RAG_BACKEND", "inmemory"),
             rag_top_k=int(os.getenv("RAG_TOP_K", "5")),

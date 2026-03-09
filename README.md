@@ -26,6 +26,10 @@ cd backend
 uvicorn app.main:app --reload
 ```
 
+When running locally, `AGENT_SQLITE_PATH` is resolved from your current working directory.
+If you run from repo root, use `AGENT_SQLITE_PATH=backend/data/agent_memory.sqlite3`.
+If you run from `backend/`, use `AGENT_SQLITE_PATH=data/agent_memory.sqlite3`.
+
 ### Option C: Docker (backend + Redis)
 
 ```bash
@@ -92,7 +96,7 @@ pytest -q
 - `GET /v1/metrics/runtime`: runtime telemetry (calls, fallback count, latency, estimated cost)
 - `POST /v1/voice/consult`: optional Sonic-style consultation (text-simulated voice response)
 
-### Break API response contract
+### Backend API response contract
 
 - `POST /v1/chat` and `GET /v1/recommendations/{session_id}` return:
   - `status`: `OK | NEED_DATA | ERROR`

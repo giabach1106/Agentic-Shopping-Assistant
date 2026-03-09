@@ -601,6 +601,7 @@ class PriceLogisticsAgent:
                 constraints=constraints,
                 consent_autofill=consent_autofill,
                 stop_before_pay=self._stop_before_pay,
+                session_id=session_id,
             )
         )
 

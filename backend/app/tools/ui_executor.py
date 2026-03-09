@@ -13,6 +13,7 @@ class UIExecutionRequest:
     constraints: dict[str, Any]
     consent_autofill: bool
     stop_before_pay: bool
+    session_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -151,6 +152,7 @@ class NovaActExecutor:
                     f"constraints={request.constraints}"
                 )
             },
+            session_id=request.session_id,
         )
 
         trace = list(base_result.execution_trace)
@@ -174,4 +176,3 @@ def build_ui_executor(settings: Settings, model_router: ModelRouter) -> UIExecut
     if backend == "nova_act":
         return NovaActExecutor(model_router=model_router, settings=settings)
     return MockUIExecutor()
-
