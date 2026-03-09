@@ -208,6 +208,7 @@ class LiveRealtimeCollector:
 
         tasks = [
             self._collect_amazon(query, result),
+            self._collect_ebay(query, result),
             self._collect_reddit(query, result),
             self._collect_tiktok(query, result),
         ]
@@ -363,6 +364,116 @@ class LiveRealtimeCollector:
                     step="collect_reviews",
                     status="error",
                     detail=f"Reddit collection error: {exc!r}",
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                )
+            )
+
+    async def _collect_ebay(self, query: str, result: CollectionResult) -> None:
+        started = time.perf_counter()
+        source: SourceName = "ebay"
+        try:
+            url = f"https://www.ebay.com/sch/i.html?_nkw={quote_plus(query)}"
+            response = await self._client.get(url)
+            body = response.text
+
+            item_url_match = re.search(
+                r'href="(https://www\.ebay\.com/itm/[^"?\s<]+)',
+                body,
+            )
+            title_match = re.search(
+                r'class="s-item__title"[^>]*>([^<]{8,240})<',
+                body,
+                re.IGNORECASE,
+            )
+            price_match = re.search(
+                r'class="s-item__price"[^>]*>\$([0-9][0-9,]*(?:\.[0-9]{2})?)',
+                body,
+                re.IGNORECASE,
+            )
+            ship_match = re.search(
+                r'class="s-item__shipping[^"]*"[^>]*>([^<]{3,120})<',
+                body,
+                re.IGNORECASE,
+            )
+            image_match = re.search(
+                r'class="s-item__image-img"[^>]*src="([^"]+)"',
+                body,
+                re.IGNORECASE,
+            )
+
+            if not item_url_match:
+                result.missing_evidence.append("ebay.product_list")
+                result.blocked_sources.append(source)
+                result.trace.append(
+                    CollectorTraceEvent(
+                        source=source,
+                        step="collect_products",
+                        status="blocked",
+                        detail="Unable to parse product cards from eBay page.",
+                        duration_ms=int((time.perf_counter() - started) * 1000),
+                    )
+                )
+                return
+
+            now = _now_iso()
+            item_url = item_url_match.group(1)
+            raw_price = price_match.group(1) if price_match else None
+            title = (
+                title_match.group(1).strip()
+                if title_match
+                else f"eBay result for {query}"
+            )
+            shipping_eta = ship_match.group(1).strip() if ship_match else "unknown"
+
+            result.products.append(
+                ProductCandidateData(
+                    source=source,
+                    url=item_url,
+                    title=title[:280],
+                    price=_safe_float(raw_price.replace(",", "") if raw_price else None, 99.0),
+                    avg_rating=0.0,
+                    rating_count=0,
+                    shipping_eta=shipping_eta[:100],
+                    return_policy="See seller listing",
+                    seller_info="eBay seller",
+                    retrieved_at=now,
+                    evidence_id=f"eby-offer-{uuid.uuid4().hex[:10]}",
+                    confidence_source=0.66,
+                    raw_snapshot_ref=url,
+                )
+            )
+            if image_match:
+                result.visuals.append(
+                    VisualRecord(
+                        source=source,
+                        url=item_url,
+                        image_url=image_match.group(1),
+                        caption=title[:200],
+                        retrieved_at=now,
+                        evidence_id=f"eby-img-{uuid.uuid4().hex[:10]}",
+                        confidence_source=0.6,
+                        raw_snapshot_ref=url,
+                    )
+                )
+
+            result.trace.append(
+                CollectorTraceEvent(
+                    source=source,
+                    step="collect_products",
+                    status="ok",
+                    detail="Collected live eBay product candidate.",
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            result.missing_evidence.append("ebay.product_list")
+            result.blocked_sources.append(source)
+            result.trace.append(
+                CollectorTraceEvent(
+                    source=source,
+                    step="collect_products",
+                    status="error",
+                    detail=f"eBay collection error: {exc!r}",
                     duration_ms=int((time.perf_counter() - started) * 1000),
                 )
             )

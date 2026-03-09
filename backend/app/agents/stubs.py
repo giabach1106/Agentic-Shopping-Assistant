@@ -305,17 +305,45 @@ class EvidenceCollectionAgent:
     async def run(self, constraints: dict[str, Any]) -> dict[str, Any]:
         result = await self._collector.collect(constraints)
         payload = result.to_public_dict()
-        source_coverage = len({item["source"] for item in payload["reviews"]})
+        source_coverage = self._compute_source_coverage(payload)
+        missing_evidence = self._normalize_missing_evidence(payload)
         status = "OK"
-        if self._settings.runtime_mode == "prod" and payload["missingEvidence"]:
+        if self._settings.runtime_mode == "prod" and missing_evidence:
             status = "NEED_DATA"
         return {
             "status": status,
             "sourceCoverage": source_coverage,
-            "missingEvidence": payload["missingEvidence"],
+            "missingEvidence": missing_evidence,
             "blockedSources": payload["blockedSources"],
             "collection": payload,
         }
+
+    def _compute_source_coverage(self, payload: dict[str, Any]) -> int:
+        sources: set[str] = set()
+        for key in ("products", "reviews", "visuals"):
+            entries = payload.get(key)
+            if not isinstance(entries, list):
+                continue
+            for item in entries:
+                if not isinstance(item, dict):
+                    continue
+                source = str(item.get("source") or "").strip().lower()
+                if source:
+                    sources.add(source)
+        return len(sources)
+
+    def _normalize_missing_evidence(self, payload: dict[str, Any]) -> list[str]:
+        missing = list(payload.get("missingEvidence") or [])
+        product_sources = {
+            str(item.get("source") or "").strip().lower()
+            for item in payload.get("products", [])
+            if isinstance(item, dict)
+        }
+        # Product-list requirements are source-agnostic: if at least one
+        # commerce source yielded products, don't block on per-source misses.
+        if product_sources:
+            missing = [item for item in missing if not str(item).endswith(".product_list")]
+        return missing
 
 
 class ReviewIntelligenceAgent:
