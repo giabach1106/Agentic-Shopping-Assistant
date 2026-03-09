@@ -44,8 +44,8 @@ Docker compose now loads variables from `.env` for backend (including `MOCK_MODE
 For local mock-only runs, keep `MOCK_MODEL=true`. For real Bedrock calls, set `MOCK_MODEL=false` in `.env`.
 Use Bedrock inference profile IDs available in your account (for example `us.amazon.nova-2-lite-v1:0`).
 Recommended realtime defaults:
-- `NOVA_DEFAULT_MODEL_ID=us.amazon.nova-2-lite-v1:0`
-- `NOVA_FALLBACK_MODEL_ID=us.amazon.nova-pro-v1:0`
+- `NOVA_DEFAULT_MODEL_ID=us.amazon.nova-2-pro-v1:0`
+- `NOVA_FALLBACK_MODEL_ID=us.amazon.nova-2-lite-v1:0`
 For strict realtime/fail-closed behavior, set `RUNTIME_MODE=prod`, `MOCK_MODEL=false`, and use a realtime executor backend.
 
 ### Test with CLI chatbot
