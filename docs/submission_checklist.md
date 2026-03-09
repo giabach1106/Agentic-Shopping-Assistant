@@ -11,9 +11,10 @@
 - [ ] `POST /v1/sessions` works
 - [ ] `POST /v1/chat` works
 - [ ] `POST /v1/runs/{session_id}/resume` works
-- [ ] `GET /v1/recommendations/{session_id}` returns score breakdown and risk flags
+- [ ] `GET /v1/recommendations/{session_id}` returns scientific score and risk flags
 - [ ] `GET /v1/sessions/{session_id}` returns checkpoint trace
 - [ ] Test suite passes (`pytest -q`)
+- [ ] Realtime collector returns at least one product source from eBay/Walmart/Amazon
 
 ## Safety and policy checks
 
@@ -32,5 +33,5 @@
 
 - [ ] Submission text explains Nova usage (planner/review/visual/executor/decision)
 - [ ] Mention trust scoring dimensions and explainability output
+- [ ] Mention multi-source collector strategy (Amazon optional)
 - [ ] Confirm no payment action is executed in any flow
-

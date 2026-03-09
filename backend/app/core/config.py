@@ -59,10 +59,10 @@ class Settings:
             aws_region=os.getenv("AWS_REGION", "us-east-1"),
             aws_bedrock_kb_id=os.getenv("BEDROCK_KB_ID"),
             default_model_id=os.getenv(
-                "NOVA_DEFAULT_MODEL_ID", "amazon.nova-pro-v1:0"
+                "NOVA_DEFAULT_MODEL_ID", "us.amazon.nova-2-lite-v1:0"
             ),
             fallback_model_id=os.getenv(
-                "NOVA_FALLBACK_MODEL_ID", "amazon.nova-lite-v1:0"
+                "NOVA_FALLBACK_MODEL_ID", "us.amazon.nova-pro-v1:0"
             ),
             model_timeout_seconds=float(os.getenv("MODEL_TIMEOUT_SECONDS", "10")),
             latency_threshold_seconds=float(

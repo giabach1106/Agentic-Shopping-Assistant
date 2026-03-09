@@ -42,14 +42,13 @@ The script will run:
 ## 4) Manual fallback scenario (automation blocked)
 
 Send chat message with `exclude captcha` and verify:
-- recommendation still returns `WAIT` or `AVOID`
-- risk flags include automation blocker
+- response remains safe (`NEED_DATA` or conservative verdict)
+- `riskFlags`/`blockingAgents` include automation blocker context
 - no payment action is executed
 
 ## 5) Judge-facing talking points
 
-- Multi-agent orchestration: planner -> review -> visual -> price/logistics -> decision.
+- Multi-agent orchestration: planner -> collect -> review -> visual -> price/logistics -> decision.
 - Safety policy: checkout automation always stops before payment.
-- Explainability: recommendation payload includes score breakdown and risk flags.
-- Resilience: system continues with graceful degradation when automation is blocked.
-
+- Explainability: recommendation payload includes scientific score, evidence stats, and risk flags.
+- Resilience: realtime collector uses multiple commerce sources (eBay/Walmart/Amazon) and degrades gracefully.

@@ -60,6 +60,8 @@ class ReviewEvidenceAnalyzer:
         "amazon": 0.84,
         "reddit": 0.9,
         "tiktok": 0.65,
+        "ebay": 0.76,
+        "walmart": 0.8,
         "bedrock-kb": 0.75,
     }
     _promo_patterns = (

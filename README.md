@@ -38,9 +38,10 @@ This starts:
 
 Docker compose now loads variables from `.env` for backend (including `MOCK_MODEL`, model IDs, AWS region/credentials).  
 For local mock-only runs, keep `MOCK_MODEL=true`. For real Bedrock calls, set `MOCK_MODEL=false` in `.env`.
-Use Bedrock model IDs in the `amazon.nova-...` format (for example `amazon.nova-2-pro-v1:0`), not `us.amazon...`.
-Recommended local defaults in this repo are `amazon.nova-pro-v1:0` (default) and `amazon.nova-lite-v1:0` (fallback).
-If you switch to Nova 2 IDs, your AWS account may require an inference profile ARN instead of on-demand model IDs.
+Use Bedrock inference profile IDs available in your account (for example `us.amazon.nova-2-lite-v1:0`).
+Recommended realtime defaults:
+- `NOVA_DEFAULT_MODEL_ID=us.amazon.nova-2-lite-v1:0`
+- `NOVA_FALLBACK_MODEL_ID=us.amazon.nova-pro-v1:0`
 For strict realtime/fail-closed behavior, set `RUNTIME_MODE=prod`, `MOCK_MODEL=false`, and use a realtime executor backend.
 
 ### Test with CLI chatbot
@@ -79,6 +80,7 @@ pytest -q
 - Set `RAG_BACKEND=bedrock_kb` and `BEDROCK_KB_ID=<your_kb_id>` to use Bedrock Knowledge Bases.
 - Ingest local corpus example:
   `python backend/scripts/ingest_local_corpus.py --input backend/data/reviews.sample.jsonl`
+- Realtime commerce collector preference is `eBay -> Walmart -> Amazon` (Amazon is optional and non-blocking when alternative product sources are available).
 
 ### Useful API endpoints
 

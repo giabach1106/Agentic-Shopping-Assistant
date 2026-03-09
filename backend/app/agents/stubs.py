@@ -168,13 +168,20 @@ class PlannerAgent:
     def _extract_constraints_regex(self, message: str) -> dict[str, Any]:
         lower = message.lower()
         category = None
-        if "chair" in lower:
-            category = "ergonomic chair"
-        elif "desk" in lower:
-            category = "desk"
-        elif "headphone" in lower:
-            category = "headphones"
-        else:
+        intent_match = re.search(
+            r"(?:need|want|looking for|find|buy|get)\s+(?:an?\s+|some\s+)?"
+            r"([a-z0-9][a-z0-9\-\s]{2,80}?)"
+            r"(?=\s+(?:under|below|with|delivered|by|exclude|for|and)\b|[,.]|$)",
+            lower,
+        )
+        if intent_match:
+            candidate = intent_match.group(1).strip()
+            candidate = re.sub(r"\s+", " ", candidate)
+            candidate = re.sub(r"^(?:a|an|the)\s+", "", candidate)
+            if 2 <= len(candidate) <= 80:
+                category = candidate
+
+        if category is None:
             stripped = lower.strip()
             generic_category = re.fullmatch(
                 r"[a-z][a-z0-9-]{1,30}(?:\s+[a-z0-9-]{1,30})?",
@@ -597,6 +604,8 @@ class PriceLogisticsAgent:
             )
         )
 
+        source_priority = {"ebay": 0, "walmart": 1, "amazon": 2}
+        ranked_candidates: list[tuple[int, dict[str, Any]]] = []
         candidates: list[dict[str, Any]] = []
         if isinstance(collection, dict):
             for item in collection.get("products", []):
@@ -605,6 +614,7 @@ class PriceLogisticsAgent:
                 url = str(item.get("url") or "").strip()
                 if not url.startswith("http"):
                     continue
+                source = str(item.get("source") or "").strip().lower()
                 candidates.append(
                     {
                         "title": str(item.get("title") or "unknown product"),
@@ -617,6 +627,21 @@ class PriceLogisticsAgent:
                         "evidenceRefs": [str(item.get("evidence_id") or "")],
                     }
                 )
+                ranked_candidates.append(
+                    (
+                        source_priority.get(source, 99),
+                        candidates[-1],
+                    )
+                )
+
+        if ranked_candidates:
+            candidates = [
+                item
+                for _, item in sorted(
+                    ranked_candidates,
+                    key=lambda entry: (entry[0], float(entry[1].get("price", 0.0))),
+                )
+            ]
 
         if self._runtime_mode != "prod" and len(candidates) == 0:
             candidates = execution_result.to_public_dict().get("candidates", [])

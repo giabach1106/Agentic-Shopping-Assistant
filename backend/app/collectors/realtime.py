@@ -50,6 +50,36 @@ class DevRealtimeCollector:
         query_id = uuid.uuid4().hex[:8]
         products = [
             ProductCandidateData(
+                source="ebay",
+                url="https://www.ebay.com/itm/266909800001",
+                title="Ergonomic Task Chair Adjustable Lumbar",
+                price=129.0,
+                avg_rating=0.0,
+                rating_count=0,
+                shipping_eta="3-6 days",
+                return_policy="Seller return policy",
+                seller_info="eBay seller",
+                retrieved_at=now,
+                evidence_id=f"eby-offer-{query_id}-1",
+                confidence_source=0.72,
+                raw_snapshot_ref=f"dev://ebay/search/{query_id}",
+            ),
+            ProductCandidateData(
+                source="walmart",
+                url="https://www.walmart.com/ip/123456789",
+                title="Ergonomic Mesh Office Chair, Adjustable Arms",
+                price=118.0,
+                avg_rating=4.2,
+                rating_count=210,
+                shipping_eta="2-5 days",
+                return_policy="30-day return",
+                seller_info="Walmart",
+                retrieved_at=now,
+                evidence_id=f"wmt-offer-{query_id}-1",
+                confidence_source=0.74,
+                raw_snapshot_ref=f"dev://walmart/search/{query_id}",
+            ),
+            ProductCandidateData(
                 source="amazon",
                 url="https://www.amazon.com/dp/B0CMFQ7Y7Q",
                 title="Ergonomic Mesh Office Chair with Adjustable Lumbar Support",
@@ -170,6 +200,20 @@ class DevRealtimeCollector:
         ]
         trace = [
             CollectorTraceEvent(
+                source="ebay",
+                step="collect_products",
+                status="ok",
+                detail="Collected product cards from development dataset.",
+                duration_ms=19,
+            ),
+            CollectorTraceEvent(
+                source="walmart",
+                step="collect_products",
+                status="ok",
+                detail="Collected product cards from development dataset.",
+                duration_ms=20,
+            ),
+            CollectorTraceEvent(
                 source="amazon",
                 step="collect_products",
                 status="ok",
@@ -207,8 +251,9 @@ class LiveRealtimeCollector:
         result = CollectionResult()
 
         tasks = [
-            self._collect_amazon(query, result),
             self._collect_ebay(query, result),
+            self._collect_walmart(query, result),
+            self._collect_amazon(query, result),
             self._collect_reddit(query, result),
             self._collect_tiktok(query, result),
         ]
@@ -474,6 +519,104 @@ class LiveRealtimeCollector:
                     step="collect_products",
                     status="error",
                     detail=f"eBay collection error: {exc!r}",
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                )
+            )
+
+    async def _collect_walmart(self, query: str, result: CollectionResult) -> None:
+        started = time.perf_counter()
+        source: SourceName = "walmart"
+        try:
+            url = f"https://www.walmart.com/search?q={quote_plus(query)}"
+            response = await self._client.get(url)
+            body = response.text
+
+            item_url_match = re.search(r'href="(/ip/[^"?\s<]+)', body)
+            title_match = re.search(
+                r'data-automation-id="product-title"[^>]*>([^<]{8,240})<',
+                body,
+                re.IGNORECASE,
+            )
+            price_match = re.search(
+                r'itemprop="price"[^>]*content="([0-9]+(?:\.[0-9]{1,2})?)"',
+                body,
+                re.IGNORECASE,
+            )
+            image_match = re.search(
+                r'class="[^"]*absolute[^"]*"[^>]*src="([^"]+)"',
+                body,
+                re.IGNORECASE,
+            )
+
+            if not item_url_match:
+                result.missing_evidence.append("walmart.product_list")
+                result.blocked_sources.append(source)
+                result.trace.append(
+                    CollectorTraceEvent(
+                        source=source,
+                        step="collect_products",
+                        status="blocked",
+                        detail="Unable to parse product cards from Walmart page.",
+                        duration_ms=int((time.perf_counter() - started) * 1000),
+                    )
+                )
+                return
+
+            item_url = f"https://www.walmart.com{item_url_match.group(1)}"
+            now = _now_iso()
+            title = (
+                title_match.group(1).strip()
+                if title_match
+                else f"Walmart result for {query}"
+            )
+            result.products.append(
+                ProductCandidateData(
+                    source=source,
+                    url=item_url,
+                    title=title[:280],
+                    price=_safe_float(price_match.group(1) if price_match else None, 95.0),
+                    avg_rating=0.0,
+                    rating_count=0,
+                    shipping_eta="unknown",
+                    return_policy="See Walmart listing",
+                    seller_info="Walmart marketplace",
+                    retrieved_at=now,
+                    evidence_id=f"wmt-offer-{uuid.uuid4().hex[:10]}",
+                    confidence_source=0.64,
+                    raw_snapshot_ref=url,
+                )
+            )
+            if image_match:
+                result.visuals.append(
+                    VisualRecord(
+                        source=source,
+                        url=item_url,
+                        image_url=image_match.group(1),
+                        caption=title[:200],
+                        retrieved_at=now,
+                        evidence_id=f"wmt-img-{uuid.uuid4().hex[:10]}",
+                        confidence_source=0.57,
+                        raw_snapshot_ref=url,
+                    )
+                )
+            result.trace.append(
+                CollectorTraceEvent(
+                    source=source,
+                    step="collect_products",
+                    status="ok",
+                    detail="Collected live Walmart product candidate.",
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            result.missing_evidence.append("walmart.product_list")
+            result.blocked_sources.append(source)
+            result.trace.append(
+                CollectorTraceEvent(
+                    source=source,
+                    step="collect_products",
+                    status="error",
+                    detail=f"Walmart collection error: {exc!r}",
                     duration_ms=int((time.perf_counter() - started) * 1000),
                 )
             )
