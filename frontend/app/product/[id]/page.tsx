@@ -2,13 +2,23 @@
 
 import { useState } from 'react';
 import { motion } from 'motion/react';
-import { Star, Clock, ShieldCheck, AlertCircle, CheckCircle2, ExternalLink, ArrowLeft, ThumbsUp, ThumbsDown, MessageSquare, Info } from 'lucide-react';
+import { Star, Clock, ShieldCheck, AlertCircle, CheckCircle2, ExternalLink, ArrowLeft, ThumbsUp, ThumbsDown, MessageSquare, Info, Activity } from 'lucide-react';
 import Link from 'next/link';
+import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer } from 'recharts';
 
 export default function ProductDetail() {
-  const [activeTab, setActiveTab] = useState('summary');
+  const [activeTab, setActiveTab] = useState('scoring');
 
   // Mock data
+  const chartData = [
+    { subject: 'Power', score: 95, fullMark: 100 },
+    { subject: 'Control', score: 75, fullMark: 100 },
+    { subject: 'Comfort', score: 60, fullMark: 100 },
+    { subject: 'Spin', score: 85, fullMark: 100 },
+    { subject: 'Maneuverability', score: 80, fullMark: 100 },
+    { subject: 'Stability', score: 90, fullMark: 100 },
+  ];
+
   const product = {
     id: '1',
     title: 'Babolat Pure Drive Tennis Racket',
@@ -108,7 +118,7 @@ export default function ProductDetail() {
             
             {/* Tabs */}
             <div className="flex items-center gap-2 border-b border-zinc-200 pb-px">
-              {['summary', 'reviews', 'scoring'].map((tab) => (
+              {['scoring', 'reviews'].map((tab) => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
@@ -130,13 +140,30 @@ export default function ProductDetail() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.2 }}
             >
-              {activeTab === 'summary' && (
+              {activeTab === 'scoring' && (
                 <div className="space-y-6">
                   <div className="bg-white p-6 rounded-xl border border-zinc-200 shadow-sm">
                     <h3 className="text-lg font-bold text-zinc-900 mb-4">Why it&apos;s a match</h3>
                     <p className="text-zinc-600 leading-relaxed mb-6">{product.description}</p>
                     
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="bg-white p-5 rounded-xl border border-zinc-200 shadow-sm md:col-span-2">
+                        <div className="flex items-center gap-2 mb-4 text-zinc-900 font-bold">
+                          <Activity className="w-5 h-5 text-orange-600" />
+                          Performance Analysis
+                        </div>
+                        <div className="h-[300px] w-full">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <RadarChart cx="50%" cy="50%" outerRadius="80%" data={chartData}>
+                              <PolarGrid stroke="#e4e4e7" />
+                              <PolarAngleAxis dataKey="subject" tick={{ fill: '#52525b', fontSize: 12 }} />
+                              <PolarRadiusAxis angle={30} domain={[0, 100]} tick={{ fill: '#a1a1aa', fontSize: 10 }} />
+                              <Radar name="Product Score" dataKey="score" stroke="#ea580c" fill="#ea580c" fillOpacity={0.3} />
+                            </RadarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+
                       <div className="bg-emerald-50/50 p-5 rounded-xl border border-emerald-100/50">
                         <div className="flex items-center gap-2 mb-3 text-emerald-800 font-bold">
                           <ThumbsUp className="w-5 h-5" />
@@ -165,6 +192,44 @@ export default function ProductDetail() {
                             </li>
                           ))}
                         </ul>
+                      </div>
+                    </div>
+
+                    <div className="mt-8 pt-8 border-t border-zinc-100">
+                      <div className="flex items-center justify-between mb-6">
+                        <h3 className="text-lg font-bold text-zinc-900">Score Breakdown</h3>
+                        <div className="flex items-center gap-1 text-sm text-zinc-500 cursor-help" title="How scoring works">
+                          <Info className="w-4 h-4" />
+                          Methodology
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-5">
+                        {product.scoreBreakdown.map((item, i) => (
+                          <div key={i}>
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-sm font-medium text-zinc-700">{item.factor} <span className="text-zinc-400 font-normal ml-1">(Weight: {item.weight})</span></span>
+                              <span className="text-sm font-bold text-zinc-900">{item.score}/100</span>
+                            </div>
+                            <div className="h-2 w-full bg-zinc-100 rounded-lg overflow-hidden">
+                              <div 
+                                className="h-full bg-orange-500 rounded-lg" 
+                                style={{ width: `${item.score}%` }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="mt-8 pt-8 border-t border-zinc-100">
+                      <h3 className="text-lg font-bold text-zinc-900 mb-4">Risk Analysis</h3>
+                      <div className="flex items-start gap-3">
+                        <ShieldCheck className="w-6 h-6 text-emerald-500 shrink-0" />
+                        <div>
+                          <h4 className="font-bold text-zinc-900">Low Risk Profile</h4>
+                          <p className="text-sm text-zinc-600 mt-1">This product passes our authenticity checks. The seller is verified, review patterns appear organic, and the return policy is standard for this category.</p>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -208,48 +273,6 @@ export default function ProductDetail() {
                           </div>
                         </div>
                       ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {activeTab === 'scoring' && (
-                <div className="space-y-6">
-                  <div className="bg-white p-6 rounded-xl border border-zinc-200 shadow-sm">
-                    <div className="flex items-center justify-between mb-6">
-                      <h3 className="text-lg font-bold text-zinc-900">Score Breakdown</h3>
-                      <div className="flex items-center gap-1 text-sm text-zinc-500 cursor-help" title="How scoring works">
-                        <Info className="w-4 h-4" />
-                        Methodology
-                      </div>
-                    </div>
-                    
-                    <div className="space-y-5">
-                      {product.scoreBreakdown.map((item, i) => (
-                        <div key={i}>
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-sm font-medium text-zinc-700">{item.factor} <span className="text-zinc-400 font-normal ml-1">(Weight: {item.weight})</span></span>
-                            <span className="text-sm font-bold text-zinc-900">{item.score}/100</span>
-                          </div>
-                          <div className="h-2 w-full bg-zinc-100 rounded-lg overflow-hidden">
-                            <div 
-                              className="h-full bg-orange-500 rounded-lg" 
-                              style={{ width: `${item.score}%` }}
-                            />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="bg-white p-6 rounded-xl border border-zinc-200 shadow-sm">
-                    <h3 className="text-lg font-bold text-zinc-900 mb-4">Risk Analysis</h3>
-                    <div className="flex items-start gap-3">
-                      <ShieldCheck className="w-6 h-6 text-emerald-500 shrink-0" />
-                      <div>
-                        <h4 className="font-bold text-zinc-900">Low Risk Profile</h4>
-                        <p className="text-sm text-zinc-600 mt-1">This product passes our authenticity checks. The seller is verified, review patterns appear organic, and the return policy is standard for this category.</p>
-                      </div>
                     </div>
                   </div>
                 </div>
