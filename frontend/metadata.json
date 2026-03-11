@@ -1,0 +1,5 @@
+{
+  "name": "Agentic Shopping Assistant",
+  "description": "An AI-powered universal cart agent that finds the best products across multiple websites based on your specific constraints.",
+  "requestFramePermissions": []
+}
