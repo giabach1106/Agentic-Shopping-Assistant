@@ -86,6 +86,7 @@ class SessionProductResponse(BaseModel):
     store_name: str = Field(alias="storeName")
     source: str
     source_url: str = Field(alias="sourceUrl")
+    image_url: str | None = Field(default=None, alias="imageUrl")
     price: float
     rating: float | None = None
     shipping_eta: str = Field(alias="shippingETA")

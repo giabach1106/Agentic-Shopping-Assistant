@@ -192,9 +192,18 @@ class TrustScoringEngine:
             )
 
         top_reasons = [
-            "Bayesian + Wilson rating reliability calculated from live rating counts.",
-            "Opinion authenticity score incorporates promo and duplication signals.",
-            "Visual reliability and evidence coverage applied to final trust score.",
+            (
+                f"Rating reliability {round(100 * rating_reliability, 1)}/100 "
+                "blends Bayesian + Wilson confidence."
+            ),
+            (
+                f"Authenticity {round(100 * spam_authenticity, 1)}/100 "
+                "reflects promo risk and duplicate-review penalties."
+            ),
+            (
+                f"Visual confidence {round(100 * visual_reliability, 1)}/100 "
+                f"with source coverage at {source_coverage}."
+            ),
         ]
         why_ranked_here = [
             f"ratingReliability={scientific_score['ratingReliability']}",
@@ -262,27 +271,56 @@ class TrustScoringEngine:
         if not aspects:
             return 0.5
 
+        # Backward compatible aliases so older traces/tests keep working.
+        normalized_aspects = {
+            "digestibility": float(
+                aspects.get("digestibility")
+                if aspects.get("digestibility") is not None
+                else aspects.get("comfort", 0.0)
+            ),
+            "mixability": float(
+                aspects.get("mixability")
+                if aspects.get("mixability") is not None
+                else aspects.get("assembly", 0.0)
+            ),
+            "taste": float(aspects.get("taste", 0.0)),
+            "ingredientQuality": float(
+                aspects.get("ingredientQuality")
+                if aspects.get("ingredientQuality") is not None
+                else aspects.get("durability", 0.0)
+            ),
+            "priceValue": float(
+                aspects.get("priceValue")
+                if aspects.get("priceValue") is not None
+                else aspects.get("price", 0.0)
+            ),
+            "delivery": float(aspects.get("delivery", 0.0)),
+        }
+
         weights = {
-            "comfort": 0.2,
-            "durability": 0.2,
-            "assembly": 0.15,
-            "price": 0.2,
-            "delivery": 0.15,
-            "return": 0.1,
+            "digestibility": 0.22,
+            "mixability": 0.16,
+            "taste": 0.14,
+            "ingredientQuality": 0.24,
+            "priceValue": 0.14,
+            "delivery": 0.1,
         }
         must_have = " ".join(str(item) for item in constraints.get("mustHave", [])).lower()
-        if "ergonomic" in must_have:
-            weights["comfort"] += 0.15
-            weights["durability"] += 0.05
-            weights["price"] -= 0.1
-            weights["return"] -= 0.1
+        if "low lactose" in must_have or "lactose" in must_have:
+            weights["digestibility"] += 0.08
+            weights["taste"] -= 0.03
+            weights["priceValue"] -= 0.05
+        if "third-party" in must_have or "third party" in must_have:
+            weights["ingredientQuality"] += 0.1
+            weights["priceValue"] -= 0.05
+            weights["taste"] -= 0.05
 
         total = max(0.0001, sum(max(0.0, val) for val in weights.values()))
         score = 0.0
         for key, weight in weights.items():
-            sentiment = float(aspects.get(key) or 0.0)  # -1..1
-            normalized = _clamp((sentiment + 1.0) / 2.0)
-            score += (max(0.0, weight) / total) * normalized
+            sentiment = float(normalized_aspects.get(key) or 0.0)  # -1..1
+            normalized_score = _clamp((sentiment + 1.0) / 2.0)
+            score += (max(0.0, weight) / total) * normalized_score
         return _clamp(score)
 
     def _visual_reliability_score(self, visual: dict[str, Any]) -> float:

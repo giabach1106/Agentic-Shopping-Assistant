@@ -5,6 +5,7 @@ import hashlib
 import json
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 
@@ -82,6 +83,26 @@ def _product_id(source_url: str, evidence_refs: list[str]) -> str:
     return hashlib.sha1(seed.encode("utf-8")).hexdigest()[:12]
 
 
+def _normalize_url(value: str) -> str:
+    trimmed = value.strip()
+    if not trimmed:
+        return ""
+    parsed = urlparse(trimmed)
+    normalized = parsed._replace(query="", fragment="")
+    path = normalized.path.rstrip("/")
+    normalized = normalized._replace(path=path or "/")
+    return normalized.geturl()
+
+
+def _store_name_from_url(value: str) -> str:
+    host = urlparse(value).netloc.lower().strip()
+    if host.startswith("www."):
+        host = host[4:]
+    if host:
+        return host.split(":")[0]
+    return "Marketplace"
+
+
 def _build_session_products(checkpoint: dict[str, Any], services: ServiceContainer) -> dict[str, Any]:
     agent_outputs = dict(checkpoint.get("agent_outputs") or {})
     collection = dict(checkpoint.get("collection") or {})
@@ -97,16 +118,26 @@ def _build_session_products(checkpoint: dict[str, Any], services: ServiceContain
     for item in collection.get("products", []):
         if not isinstance(item, dict):
             continue
-        url = str(item.get("url") or "").strip()
+        url = _normalize_url(str(item.get("url") or ""))
         if url:
             collect_lookup[url] = item
+
+    visual_lookup: dict[str, str] = {}
+    for item in collection.get("visuals", []):
+        if not isinstance(item, dict):
+            continue
+        url = _normalize_url(str(item.get("url") or ""))
+        image_url = str(item.get("image_url") or item.get("imageUrl") or "").strip()
+        if url and image_url and url not in visual_lookup:
+            visual_lookup[url] = image_url
 
     items: list[dict[str, Any]] = []
     for candidate in price.get("candidates", []):
         if not isinstance(candidate, dict):
             continue
         source_url = str(candidate.get("sourceUrl") or "").strip()
-        collect_item = collect_lookup.get(source_url, {})
+        normalized_source_url = _normalize_url(source_url)
+        collect_item = collect_lookup.get(normalized_source_url, {})
         evidence_refs = [
             str(item).strip()
             for item in candidate.get("evidenceRefs", [])
@@ -119,15 +150,25 @@ def _build_session_products(checkpoint: dict[str, Any], services: ServiceContain
             evidence_refs=evidence_refs,
             source_url=source_url,
         )
+        store_name = (
+            str(collect_item.get("seller_info") or "").strip()
+            or str(collect_item.get("source") or "").strip()
+            or _store_name_from_url(source_url)
+        )
+        source_name = str(collect_item.get("source") or "").strip() or _store_name_from_url(source_url)
+        image_url = str(
+            collect_item.get("image_url")
+            or collect_item.get("imageUrl")
+            or visual_lookup.get(normalized_source_url, "")
+        ).strip()
         items.append(
             {
                 "productId": _product_id(source_url, evidence_refs),
                 "title": candidate.get("title"),
-                "storeName": collect_item.get("seller_info")
-                or collect_item.get("source")
-                or "Marketplace",
-                "source": collect_item.get("source") or "unknown",
+                "storeName": store_name,
+                "source": source_name,
                 "sourceUrl": source_url,
+                "imageUrl": image_url or None,
                 "price": candidate.get("price"),
                 "rating": candidate.get("rating"),
                 "shippingETA": candidate.get("shippingETA"),

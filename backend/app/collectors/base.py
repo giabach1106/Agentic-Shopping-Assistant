@@ -21,6 +21,7 @@ class ProductCandidateData:
     evidence_id: str
     confidence_source: float
     raw_snapshot_ref: str
+    image_url: str | None = None
 
     def to_public_dict(self) -> dict[str, Any]:
         return asdict(self)

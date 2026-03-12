@@ -214,10 +214,15 @@ class SQLiteEvidenceStore:
         params: list[Any] = []
         if query and query.strip():
             terms = [part.strip().lower() for part in query.split() if part.strip()]
-            for term in terms[:6]:
-                clauses.append("(lower(title) LIKE ? OR lower(COALESCE(ingredient_text,'')) LIKE ?)")
-                like = f"%{term}%"
-                params.extend([like, like])
+            if terms:
+                term_clauses: list[str] = []
+                for term in terms[:8]:
+                    term_clauses.append(
+                        "(lower(title) LIKE ? OR lower(COALESCE(ingredient_text,'')) LIKE ?)"
+                    )
+                    like = f"%{term}%"
+                    params.extend([like, like])
+                clauses.append("(" + " OR ".join(term_clauses) + ")")
 
         sql = f"""
             SELECT

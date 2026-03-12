@@ -388,6 +388,7 @@ class CoverageAuditorAgent:
                     "price": float(item.get("price") or 0.0),
                     "avg_rating": float(item.get("rating") or 0.0),
                     "rating_count": int(item.get("rating_count") or 0),
+                    "image_url": str(item.get("image_url") or "").strip() or None,
                     "shipping_eta": "unknown",
                     "return_policy": "unknown",
                     "seller_info": str(item.get("brand") or source).strip() or source,
@@ -918,20 +919,20 @@ class ReviewIntelligenceAgent:
             risk_flags.append("Low evidence coverage across sources.")
 
         aspects = {
-            "comfort": 0.0,
-            "durability": 0.0,
-            "assembly": 0.0,
-            "price": 0.0,
+            "digestibility": 0.0,
+            "mixability": 0.0,
+            "taste": 0.0,
+            "ingredientQuality": 0.0,
+            "priceValue": 0.0,
             "delivery": 0.0,
-            "return": 0.0,
         }
         keywords = {
-            "comfort": ("comfort", "back", "lumbar", "seat"),
-            "durability": ("durable", "wobble", "break", "sturdy"),
-            "assembly": ("assembly", "assemble", "screw", "manual"),
-            "price": ("price", "value", "expensive", "cheap"),
+            "digestibility": ("digest", "bloat", "stomach", "lactose", "tolerate"),
+            "mixability": ("mix", "clump", "texture", "shaker", "foam"),
+            "taste": ("taste", "flavor", "sweet", "aftertaste"),
+            "ingredientQuality": ("ingredient", "third-party", "tested", "clean label", "sucralose", "additive"),
+            "priceValue": ("price", "value", "expensive", "cheap", "cost"),
             "delivery": ("ship", "delivery", "arrive", "late"),
-            "return": ("return", "refund", "policy"),
         }
         for aspect, tokens in keywords.items():
             hits = [doc for doc in docs if any(token in doc.content.lower() for token in tokens)]
@@ -1055,8 +1056,8 @@ class PriceLogisticsAgent:
             )
         )
 
-        source_priority = {"ebay": 0, "walmart": 1, "amazon": 2}
-        ranked_candidates: list[tuple[int, dict[str, Any]]] = []
+        source_priority = {"amazon": 0, "walmart": 1, "ebay": 2}
+        ranked_candidates: list[tuple[float, float, int, dict[str, Any]]] = []
         candidates: list[dict[str, Any]] = []
         if isinstance(collection, dict):
             for item in collection.get("products", []):
@@ -1065,13 +1066,17 @@ class PriceLogisticsAgent:
                 url = str(item.get("url") or "").strip()
                 if not url.startswith("http"):
                     continue
+                title = str(item.get("title") or "").strip()
+                if not title or title.lower().startswith("unknown"):
+                    continue
                 source = str(item.get("source") or "").strip().lower()
+                rating = float(item.get("avg_rating") or 0.0)
                 candidates.append(
                     {
-                        "title": str(item.get("title") or "unknown product"),
+                        "title": title,
                         "sourceUrl": url,
                         "price": float(item.get("price") or 1.0),
-                        "rating": float(item.get("avg_rating") or 0.0),
+                        "rating": rating,
                         "shippingETA": str(item.get("shipping_eta") or "unknown"),
                         "returnPolicy": str(item.get("return_policy") or "unknown"),
                         "checkoutReady": False,
@@ -1080,6 +1085,8 @@ class PriceLogisticsAgent:
                 )
                 ranked_candidates.append(
                     (
+                        -rating,
+                        float(item.get("price") or 1.0),
                         source_priority.get(source, 99),
                         candidates[-1],
                     )
@@ -1088,11 +1095,11 @@ class PriceLogisticsAgent:
         if ranked_candidates:
             candidates = [
                 item
-                for _, item in sorted(
+                for _, _, _, item in sorted(
                     ranked_candidates,
-                    key=lambda entry: (entry[0], float(entry[1].get("price", 0.0))),
+                    key=lambda entry: (entry[0], entry[1], entry[2]),
                 )
-            ]
+            ][:10]
 
         if self._runtime_mode != "prod" and len(candidates) == 0:
             candidates = execution_result.to_public_dict().get("candidates", [])

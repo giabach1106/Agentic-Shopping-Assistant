@@ -35,10 +35,76 @@ def _now_iso() -> str:
 def _safe_float(value: str | None, fallback: float) -> float:
     if value is None:
         return fallback
+    cleaned = re.sub(r"[^0-9.]", "", value)
+    if not cleaned:
+        return fallback
     try:
-        return float(value)
+        return float(cleaned)
     except ValueError:
         return fallback
+
+
+def _safe_int(value: str | None, fallback: int = 0) -> int:
+    if value is None:
+        return fallback
+    cleaned = re.sub(r"[^0-9]", "", value)
+    if not cleaned:
+        return fallback
+    try:
+        return int(cleaned)
+    except ValueError:
+        return fallback
+
+
+_SUPPLEMENT_KEYWORDS = (
+    "whey",
+    "protein",
+    "isolate",
+    "supplement",
+    "creatine",
+    "pre workout",
+    "pre-workout",
+    "casein",
+    "collagen",
+    "electrolyte",
+    "vitamin",
+    "omega",
+    "probiotic",
+    "bcaa",
+    "eaa",
+    "glutamine",
+)
+
+_OFF_TOPIC_HINTS = (
+    "nba",
+    "doubleheader",
+    "wedding",
+    "movie",
+    "iphone",
+    "politics",
+    "news",
+)
+
+
+def _normalize_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _is_relevant_supplement_text(text: str, query: str) -> bool:
+    haystack = f"{text} {query}".lower()
+    if any(token in haystack for token in _OFF_TOPIC_HINTS):
+        return False
+    return any(token in haystack for token in _SUPPLEMENT_KEYWORDS)
+
+
+def _extract_numeric_price(value: str) -> float | None:
+    match = re.search(r"([0-9][0-9,]*(?:\.[0-9]{2})?)", value)
+    if not match:
+        return None
+    try:
+        return float(match.group(1).replace(",", ""))
+    except ValueError:
+        return None
 
 
 class DevRealtimeCollector:
@@ -69,6 +135,7 @@ class DevRealtimeCollector:
                 evidence_id=f"eby-offer-{query_id}-1",
                 confidence_source=0.72,
                 raw_snapshot_ref=f"dev://ebay/search/{query_id}",
+                image_url="https://i.ebayimg.com/images/g/3foAAOSw1AlmPVDf/s-l1600.jpg",
             ),
             ProductCandidateData(
                 source="walmart",
@@ -84,6 +151,7 @@ class DevRealtimeCollector:
                 evidence_id=f"wmt-offer-{query_id}-1",
                 confidence_source=0.74,
                 raw_snapshot_ref=f"dev://walmart/search/{query_id}",
+                image_url="https://i5.walmartimages.com/seo/Dymatize-ISO100-Hydrolyzed-100-Whey-Protein-Isolate-Powder-Gourmet-Vanilla-20-Servings_3af4f9f8-4b08-4f4d-aaf4-2284fcb8f066.0f6d4ca2f0f2f8f95b8d3f0d18f9c7d6.jpeg",
             ),
             ProductCandidateData(
                 source="amazon",
@@ -99,6 +167,7 @@ class DevRealtimeCollector:
                 evidence_id=f"amz-offer-{query_id}-1",
                 confidence_source=0.88,
                 raw_snapshot_ref=f"dev://amazon/search/{query_id}",
+                image_url="https://images-na.ssl-images-amazon.com/images/I/71E+QxP6AUL._SL1500_.jpg",
             ),
             ProductCandidateData(
                 source="amazon",
@@ -114,6 +183,7 @@ class DevRealtimeCollector:
                 evidence_id=f"amz-offer-{query_id}-2",
                 confidence_source=0.83,
                 raw_snapshot_ref=f"dev://amazon/search/{query_id}",
+                image_url="https://images-na.ssl-images-amazon.com/images/I/71y-8zIafSL._SL1500_.jpg",
             ),
         ]
         reviews = [
@@ -273,12 +343,78 @@ class LiveRealtimeCollector:
             url = f"https://www.amazon.com/s?k={quote_plus(query)}"
             response = await self._client.get(url)
             body = response.text
-            product_match = re.search(r'href="(/dp/[A-Z0-9]{10})', body)
-            title_match = re.search(r'alt="([^"]{10,200})"', body)
-            rating_match = re.search(r'([0-5]\.[0-9]) out of 5 stars', body)
-            count_match = re.search(r'([0-9,]+)\s+ratings', body)
+            product_urls = list(
+                dict.fromkeys(
+                    re.findall(r'href="(/[^"]*/dp/[A-Z0-9]{10}[^"]*)"', body)
+                )
+            )
+            now = _now_iso()
+            added = 0
+            for relative_url in product_urls:
+                full_url = f"https://www.amazon.com{relative_url.split('?')[0]}"
+                href_pos = body.find(relative_url)
+                window_start = max(0, href_pos - 700) if href_pos >= 0 else 0
+                window_end = min(len(body), href_pos + 1600) if href_pos >= 0 else len(body)
+                window = body[window_start:window_end]
 
-            if not product_match:
+                title_match = re.search(
+                    r'(?:alt|aria-label)="([^"]{10,280})"',
+                    window,
+                    re.IGNORECASE,
+                )
+                price_match = re.search(
+                    r'\$([0-9][0-9,]*(?:\.[0-9]{2})?)',
+                    window,
+                    re.IGNORECASE,
+                )
+                rating_match = re.search(r'([0-5]\.[0-9])\s*out of 5 stars', window)
+                count_match = re.search(r'([0-9,]+)\s+ratings?', window)
+                image_match = re.search(
+                    r'src="(https://[^"]+\.(?:jpg|jpeg|png))"',
+                    window,
+                    re.IGNORECASE,
+                )
+
+                title = _normalize_text(title_match.group(1)) if title_match else ""
+                if not title or not _is_relevant_supplement_text(title, query):
+                    continue
+
+                result.products.append(
+                    ProductCandidateData(
+                        source=source,
+                        url=full_url,
+                        title=title[:280],
+                        price=_safe_float(price_match.group(1) if price_match else None, 99.0),
+                        avg_rating=_safe_float(rating_match.group(1) if rating_match else None, 0.0),
+                        rating_count=_safe_int(count_match.group(1) if count_match else None, 0),
+                        shipping_eta="unknown",
+                        return_policy="Amazon policy",
+                        seller_info="Amazon marketplace",
+                        retrieved_at=now,
+                        evidence_id=f"amz-offer-{uuid.uuid4().hex[:10]}",
+                        confidence_source=0.66,
+                        raw_snapshot_ref=url,
+                        image_url=image_match.group(1) if image_match else None,
+                    )
+                )
+                if image_match:
+                    result.visuals.append(
+                        VisualRecord(
+                            source=source,
+                            url=full_url,
+                            image_url=image_match.group(1),
+                            caption=title[:180],
+                            retrieved_at=now,
+                            evidence_id=f"amz-img-{uuid.uuid4().hex[:10]}",
+                            confidence_source=0.6,
+                            raw_snapshot_ref=url,
+                        )
+                    )
+                added += 1
+                if added >= 6:
+                    break
+
+            if added == 0:
                 result.missing_evidence.append("amazon.product_list")
                 result.blocked_sources.append(source)
                 result.trace.append(
@@ -292,31 +428,12 @@ class LiveRealtimeCollector:
                 )
                 return
 
-            full_url = f"https://www.amazon.com{product_match.group(1)}"
-            now = _now_iso()
-            result.products.append(
-                ProductCandidateData(
-                    source=source,
-                    url=full_url,
-                    title=(title_match.group(1) if title_match else f"Amazon result for {query}")[:280],
-                    price=99.0,
-                    avg_rating=_safe_float(rating_match.group(1) if rating_match else None, 4.0),
-                    rating_count=int((count_match.group(1) if count_match else "0").replace(",", "")),
-                    shipping_eta="unknown",
-                    return_policy="unknown",
-                    seller_info="unknown",
-                    retrieved_at=now,
-                    evidence_id=f"amz-offer-{uuid.uuid4().hex[:10]}",
-                    confidence_source=0.62,
-                    raw_snapshot_ref=url,
-                )
-            )
             result.trace.append(
                 CollectorTraceEvent(
                     source=source,
                     step="collect_products",
                     status="ok",
-                    detail="Collected live Amazon product candidate.",
+                    detail=f"Collected {added} live Amazon product candidates.",
                     duration_ms=int((time.perf_counter() - started) * 1000),
                 )
             )
@@ -357,6 +474,8 @@ class LiveRealtimeCollector:
                 if not title:
                     continue
                 text = (title + " " + body).strip()
+                if not _is_relevant_supplement_text(text, query):
+                    continue
                 result.reviews.append(
                     ReviewRecord(
                         source=source,
@@ -388,6 +507,8 @@ class LiveRealtimeCollector:
                         )
                     )
                 added += 1
+                if added >= 12:
+                    break
 
             if added == 0:
                 result.missing_evidence.append("reddit.reviews")
@@ -426,33 +547,164 @@ class LiveRealtimeCollector:
             url = f"https://www.ebay.com/sch/i.html?_nkw={quote_plus(query)}"
             response = await self._client.get(url)
             body = response.text
+            item_blocks = re.findall(
+                r'(<li[^>]+class="s-item[^"]*"[\s\S]*?</li>)',
+                body,
+                re.IGNORECASE,
+            )
+            now = _now_iso()
+            added = 0
+            for block in item_blocks:
+                item_url_match = re.search(
+                    r'href="(https://www\.ebay\.com/itm/[^"?\s<]+)',
+                    block,
+                    re.IGNORECASE,
+                )
+                title_match = re.search(
+                    r'class="s-item__title"[^>]*>([^<]{8,280})<',
+                    block,
+                    re.IGNORECASE,
+                )
+                price_match = re.search(
+                    r'class="s-item__price"[^>]*>\$([0-9][0-9,]*(?:\.[0-9]{2})?)',
+                    block,
+                    re.IGNORECASE,
+                )
+                ship_match = re.search(
+                    r'class="s-item__shipping[^"]*"[^>]*>([^<]{3,120})<',
+                    block,
+                    re.IGNORECASE,
+                )
+                image_match = re.search(
+                    r'class="s-item__image-img"[^>]*src="([^"]+)"',
+                    block,
+                    re.IGNORECASE,
+                )
+                rating_match = re.search(
+                    r'([0-5]\.[0-9])\s*out of 5',
+                    block,
+                    re.IGNORECASE,
+                )
+                count_match = re.search(r'\(([0-9,]+)\)', block)
 
-            item_url_match = re.search(
-                r'href="(https://www\.ebay\.com/itm/[^"?\s<]+)',
-                body,
-            )
-            title_match = re.search(
-                r'class="s-item__title"[^>]*>([^<]{8,240})<',
-                body,
-                re.IGNORECASE,
-            )
-            price_match = re.search(
-                r'class="s-item__price"[^>]*>\$([0-9][0-9,]*(?:\.[0-9]{2})?)',
-                body,
-                re.IGNORECASE,
-            )
-            ship_match = re.search(
-                r'class="s-item__shipping[^"]*"[^>]*>([^<]{3,120})<',
-                body,
-                re.IGNORECASE,
-            )
-            image_match = re.search(
-                r'class="s-item__image-img"[^>]*src="([^"]+)"',
-                body,
-                re.IGNORECASE,
-            )
+                if not item_url_match:
+                    continue
+                item_url = item_url_match.group(1)
+                title = (
+                    _normalize_text(title_match.group(1))
+                    if title_match
+                    else f"eBay result for {query}"
+                )
+                if not title or "shop on ebay" in title.lower():
+                    continue
+                if not _is_relevant_supplement_text(title, query):
+                    continue
 
-            if not item_url_match:
+                raw_price = price_match.group(1) if price_match else None
+                shipping_eta = _normalize_text(ship_match.group(1)) if ship_match else "unknown"
+
+                result.products.append(
+                    ProductCandidateData(
+                        source=source,
+                        url=item_url,
+                        title=title[:280],
+                        price=_safe_float(raw_price.replace(",", "") if raw_price else None, 99.0),
+                        avg_rating=_safe_float(rating_match.group(1) if rating_match else None, 0.0),
+                        rating_count=_safe_int(count_match.group(1) if count_match else None, 0),
+                        shipping_eta=shipping_eta[:100],
+                        return_policy="See seller listing",
+                        seller_info="eBay seller",
+                        retrieved_at=now,
+                        evidence_id=f"eby-offer-{uuid.uuid4().hex[:10]}",
+                        confidence_source=0.66,
+                        raw_snapshot_ref=url,
+                        image_url=image_match.group(1) if image_match else None,
+                    )
+                )
+                if image_match:
+                    result.visuals.append(
+                        VisualRecord(
+                            source=source,
+                            url=item_url,
+                            image_url=image_match.group(1),
+                            caption=title[:200],
+                            retrieved_at=now,
+                            evidence_id=f"eby-img-{uuid.uuid4().hex[:10]}",
+                            confidence_source=0.6,
+                            raw_snapshot_ref=url,
+                        )
+                    )
+                added += 1
+                if added >= 8:
+                    break
+
+            if added == 0:
+                item_urls = list(
+                    dict.fromkeys(
+                        re.findall(
+                            r'(https://www\.ebay\.com/itm/[^"?\s<]+)',
+                            body,
+                            re.IGNORECASE,
+                        )
+                    )
+                )
+                for item_url in item_urls:
+                    idx = body.find(item_url)
+                    window = body[max(0, idx - 900): min(len(body), idx + 1700)] if idx >= 0 else body
+                    title_match = re.search(
+                        r'(?:aria-label|title|alt)="([^"]{10,260})"',
+                        window,
+                        re.IGNORECASE,
+                    )
+                    price_match = re.search(
+                        r'\$([0-9][0-9,]*(?:\.[0-9]{2})?)',
+                        window,
+                        re.IGNORECASE,
+                    )
+                    image_match = re.search(
+                        r'src="(https://[^"]+\.(?:jpg|jpeg|png))"',
+                        window,
+                        re.IGNORECASE,
+                    )
+                    title = _normalize_text(title_match.group(1)) if title_match else ""
+                    if not title or not _is_relevant_supplement_text(title, query):
+                        continue
+                    result.products.append(
+                        ProductCandidateData(
+                            source=source,
+                            url=item_url,
+                            title=title[:280],
+                            price=_safe_float(price_match.group(1) if price_match else None, 99.0),
+                            avg_rating=0.0,
+                            rating_count=0,
+                            shipping_eta="unknown",
+                            return_policy="See seller listing",
+                            seller_info="eBay seller",
+                            retrieved_at=now,
+                            evidence_id=f"eby-offer-{uuid.uuid4().hex[:10]}",
+                            confidence_source=0.58,
+                            raw_snapshot_ref=url,
+                            image_url=image_match.group(1) if image_match else None,
+                        )
+                    )
+                    if image_match:
+                        result.visuals.append(
+                            VisualRecord(
+                                source=source,
+                                url=item_url,
+                                image_url=image_match.group(1),
+                                caption=title[:200],
+                                retrieved_at=now,
+                                evidence_id=f"eby-img-{uuid.uuid4().hex[:10]}",
+                                confidence_source=0.52,
+                                raw_snapshot_ref=url,
+                            )
+                        )
+                    added += 1
+                    if added >= 6:
+                        break
+
+            if added == 0:
                 result.missing_evidence.append("ebay.product_list")
                 result.blocked_sources.append(source)
                 result.trace.append(
@@ -466,53 +718,12 @@ class LiveRealtimeCollector:
                 )
                 return
 
-            now = _now_iso()
-            item_url = item_url_match.group(1)
-            raw_price = price_match.group(1) if price_match else None
-            title = (
-                title_match.group(1).strip()
-                if title_match
-                else f"eBay result for {query}"
-            )
-            shipping_eta = ship_match.group(1).strip() if ship_match else "unknown"
-
-            result.products.append(
-                ProductCandidateData(
-                    source=source,
-                    url=item_url,
-                    title=title[:280],
-                    price=_safe_float(raw_price.replace(",", "") if raw_price else None, 99.0),
-                    avg_rating=0.0,
-                    rating_count=0,
-                    shipping_eta=shipping_eta[:100],
-                    return_policy="See seller listing",
-                    seller_info="eBay seller",
-                    retrieved_at=now,
-                    evidence_id=f"eby-offer-{uuid.uuid4().hex[:10]}",
-                    confidence_source=0.66,
-                    raw_snapshot_ref=url,
-                )
-            )
-            if image_match:
-                result.visuals.append(
-                    VisualRecord(
-                        source=source,
-                        url=item_url,
-                        image_url=image_match.group(1),
-                        caption=title[:200],
-                        retrieved_at=now,
-                        evidence_id=f"eby-img-{uuid.uuid4().hex[:10]}",
-                        confidence_source=0.6,
-                        raw_snapshot_ref=url,
-                    )
-                )
-
             result.trace.append(
                 CollectorTraceEvent(
                     source=source,
                     step="collect_products",
                     status="ok",
-                    detail="Collected live eBay product candidate.",
+                    detail=f"Collected {added} live eBay product candidates.",
                     duration_ms=int((time.perf_counter() - started) * 1000),
                 )
             )
@@ -536,25 +747,145 @@ class LiveRealtimeCollector:
             url = f"https://www.walmart.com/search?q={quote_plus(query)}"
             response = await self._client.get(url)
             body = response.text
+            candidate_matches = re.findall(
+                r'"name":"([^"]{8,220})"[\s\S]{0,500}?"canonicalUrl":"(/ip/[^"]+)"[\s\S]{0,500}?"price":([0-9]+(?:\.[0-9]+)?)',
+                body,
+                re.IGNORECASE,
+            )
+            if not candidate_matches:
+                candidate_matches = re.findall(
+                    r'href="(/ip/[^"?\s<]+)"[\s\S]{0,400}?\$([0-9][0-9,]*(?:\.[0-9]{2})?)',
+                    body,
+                    re.IGNORECASE,
+                )
 
-            item_url_match = re.search(r'href="(/ip/[^"?\s<]+)', body)
-            title_match = re.search(
-                r'data-automation-id="product-title"[^>]*>([^<]{8,240})<',
-                body,
-                re.IGNORECASE,
-            )
-            price_match = re.search(
-                r'itemprop="price"[^>]*content="([0-9]+(?:\.[0-9]{1,2})?)"',
-                body,
-                re.IGNORECASE,
-            )
-            image_match = re.search(
-                r'class="[^"]*absolute[^"]*"[^>]*src="([^"]+)"',
-                body,
-                re.IGNORECASE,
-            )
+            now = _now_iso()
+            added = 0
 
-            if not item_url_match:
+            # Structured JSON block path.
+            for match in candidate_matches:
+                if len(match) == 3:
+                    title, rel_url, raw_price = match
+                else:
+                    rel_url, raw_price = match
+                    title = f"Walmart result for {query}"
+                clean_title = _normalize_text(title)
+                if not clean_title or not _is_relevant_supplement_text(clean_title, query):
+                    continue
+                item_url = f"https://www.walmart.com{rel_url.split('?')[0]}"
+                idx = body.find(rel_url)
+                window = body[max(0, idx - 600): min(len(body), idx + 1600)] if idx >= 0 else body
+                image_match = re.search(
+                    r'src="(https://i5\.walmartimages\.com/[^"]+\.(?:jpg|jpeg|png))"',
+                    window,
+                    re.IGNORECASE,
+                )
+                rating_match = re.search(r'"averageRating":([0-9]+(?:\.[0-9]+)?)', window)
+                count_match = re.search(r'"numberOfReviews":([0-9]+)', window)
+
+                result.products.append(
+                    ProductCandidateData(
+                        source=source,
+                        url=item_url,
+                        title=clean_title[:280],
+                        price=_safe_float(raw_price, 95.0),
+                        avg_rating=_safe_float(rating_match.group(1) if rating_match else None, 0.0),
+                        rating_count=_safe_int(count_match.group(1) if count_match else None, 0),
+                        shipping_eta="unknown",
+                        return_policy="See Walmart listing",
+                        seller_info="Walmart marketplace",
+                        retrieved_at=now,
+                        evidence_id=f"wmt-offer-{uuid.uuid4().hex[:10]}",
+                        confidence_source=0.64,
+                        raw_snapshot_ref=url,
+                        image_url=image_match.group(1) if image_match else None,
+                    )
+                )
+                if image_match:
+                    result.visuals.append(
+                        VisualRecord(
+                            source=source,
+                            url=item_url,
+                            image_url=image_match.group(1),
+                            caption=clean_title[:200],
+                            retrieved_at=now,
+                            evidence_id=f"wmt-img-{uuid.uuid4().hex[:10]}",
+                            confidence_source=0.57,
+                            raw_snapshot_ref=url,
+                        )
+                    )
+                added += 1
+                if added >= 8:
+                    break
+
+            if added == 0:
+                item_urls = list(
+                    dict.fromkeys(
+                        re.findall(
+                            r'href="(/ip/[^"?\s<]+)"',
+                            body,
+                            re.IGNORECASE,
+                        )
+                    )
+                )
+                for rel_url in item_urls:
+                    idx = body.find(rel_url)
+                    window = body[max(0, idx - 900): min(len(body), idx + 1900)] if idx >= 0 else body
+                    title_match = re.search(
+                        r'(?:aria-label|title)="([^"]{10,260})"',
+                        window,
+                        re.IGNORECASE,
+                    )
+                    price_match = re.search(
+                        r'\$([0-9][0-9,]*(?:\.[0-9]{2})?)',
+                        window,
+                        re.IGNORECASE,
+                    )
+                    image_match = re.search(
+                        r'src="(https://i5\.walmartimages\.com/[^"]+\.(?:jpg|jpeg|png))"',
+                        window,
+                        re.IGNORECASE,
+                    )
+                    clean_title = _normalize_text(title_match.group(1)) if title_match else ""
+                    if not clean_title or not _is_relevant_supplement_text(clean_title, query):
+                        continue
+                    item_url = f"https://www.walmart.com{rel_url.split('?')[0]}"
+                    result.products.append(
+                        ProductCandidateData(
+                            source=source,
+                            url=item_url,
+                            title=clean_title[:280],
+                            price=_safe_float(price_match.group(1) if price_match else None, 95.0),
+                            avg_rating=0.0,
+                            rating_count=0,
+                            shipping_eta="unknown",
+                            return_policy="See Walmart listing",
+                            seller_info="Walmart marketplace",
+                            retrieved_at=now,
+                            evidence_id=f"wmt-offer-{uuid.uuid4().hex[:10]}",
+                            confidence_source=0.56,
+                            raw_snapshot_ref=url,
+                            image_url=image_match.group(1) if image_match else None,
+                        )
+                    )
+                    if image_match:
+                        result.visuals.append(
+                            VisualRecord(
+                                source=source,
+                                url=item_url,
+                                image_url=image_match.group(1),
+                                caption=clean_title[:200],
+                                retrieved_at=now,
+                                evidence_id=f"wmt-img-{uuid.uuid4().hex[:10]}",
+                                confidence_source=0.5,
+                                raw_snapshot_ref=url,
+                            )
+                        )
+                    added += 1
+                    if added >= 6:
+                        break
+
+            if added == 0:
                 result.missing_evidence.append("walmart.product_list")
                 result.blocked_sources.append(source)
                 result.trace.append(
@@ -568,49 +899,12 @@ class LiveRealtimeCollector:
                 )
                 return
 
-            item_url = f"https://www.walmart.com{item_url_match.group(1)}"
-            now = _now_iso()
-            title = (
-                title_match.group(1).strip()
-                if title_match
-                else f"Walmart result for {query}"
-            )
-            result.products.append(
-                ProductCandidateData(
-                    source=source,
-                    url=item_url,
-                    title=title[:280],
-                    price=_safe_float(price_match.group(1) if price_match else None, 95.0),
-                    avg_rating=0.0,
-                    rating_count=0,
-                    shipping_eta="unknown",
-                    return_policy="See Walmart listing",
-                    seller_info="Walmart marketplace",
-                    retrieved_at=now,
-                    evidence_id=f"wmt-offer-{uuid.uuid4().hex[:10]}",
-                    confidence_source=0.64,
-                    raw_snapshot_ref=url,
-                )
-            )
-            if image_match:
-                result.visuals.append(
-                    VisualRecord(
-                        source=source,
-                        url=item_url,
-                        image_url=image_match.group(1),
-                        caption=title[:200],
-                        retrieved_at=now,
-                        evidence_id=f"wmt-img-{uuid.uuid4().hex[:10]}",
-                        confidence_source=0.57,
-                        raw_snapshot_ref=url,
-                    )
-                )
             result.trace.append(
                 CollectorTraceEvent(
                     source=source,
                     step="collect_products",
                     status="ok",
-                    detail="Collected live Walmart product candidate.",
+                    detail=f"Collected {added} live Walmart product candidates.",
                     duration_ms=int((time.perf_counter() - started) * 1000),
                 )
             )
