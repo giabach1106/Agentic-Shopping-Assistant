@@ -1,220 +1,88 @@
-import os
-import logging
-from dotenv import load_dotenv
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
-from fastapi import FastAPI, Depends, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
-
-from .db import engine, get_db, Base
-from .models import Product, InteractionEvent, UserProduct, Order, User
-from .schemas import ProductOut, InteractionIn, OrderOut
-from .auth import get_current_user
-
-load_dotenv()  # loads backend/.env
-
-app = FastAPI(title="Agentic Shopping Assistant API",
-              swagger_ui_parameters={"persistAuthorization": True},)
-logger = logging.getLogger(__name__)
-
-# CORS
-origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[o.strip() for o in origins if o.strip()],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+from app.agents.stubs import (
+    DecisionAgent,
+    EvidenceCollectionAgent,
+    PlannerAgent,
+    PriceLogisticsAgent,
+    ReviewIntelligenceAgent,
+    VisualVerificationAgent,
 )
+from app.api.routes import router as api_router
+from app.core.config import Settings
+from app.core.container import ServiceContainer
+from app.core.logging import configure_logging
+from app.core.model_router import ModelRouter
+from app.memory.redis_checkpoint import RedisCheckpointStore
+from app.memory.session_service import SessionService
+from app.memory.sqlite_store import SQLiteSessionStore
+from app.orchestrator.graph import AgentOrchestrator
+from app.rag.providers import build_rag_service
+from app.tools.ui_executor import build_ui_executor
+from app.collectors.realtime import build_realtime_collector
 
 
-@app.on_event("startup")
-def startup_db_init() -> None:
-    auto_init_db = os.getenv("AUTO_INIT_DB", "true").strip().lower() == "true"
-    if not auto_init_db:
-        logger.info("Skipping DB init because AUTO_INIT_DB is not true.")
-        return
+def create_app(settings: Settings | None = None) -> FastAPI:
+    configure_logging()
+    resolved_settings = settings or Settings.from_env()
+    rag_service = build_rag_service(resolved_settings)
+    realtime_collector = build_realtime_collector(resolved_settings)
 
-    try:
-        Base.metadata.create_all(bind=engine)
-        logger.info("DB init OK (create_all).")
-    except Exception as exc:
-        logger.exception("DB init failed during startup: %s", exc)
-
-
-def ensure_user(db: Session, user_claims: dict) -> str:
-    """
-    Ensures a row exists in users table for this Cognito subject.
-    Returns user_id (sub).
-    """
-    user_id = user_claims["sub"]
-    email = user_claims.get("email")
-
-    user = db.get(User, user_id)
-    if not user:
-        user = User(id=user_id, email=email)
-        db.add(user)
-        db.flush()  # allocate row in same transaction
-    else:
-        if email and user.email != email:
-            user.email = email
-
-    return user_id
-
-
-# ----------------------
-# Basic endpoints
-# ----------------------
-@app.get("/health")
-def health():
-    return {"ok": True}
-
-
-@app.get("/me")
-def me(
-    db: Session = Depends(get_db),
-    user_claims=Depends(get_current_user),
-):
-    user_id = ensure_user(db, user_claims)
-    db.commit()
-    user = db.get(User, user_id)
-    return {"user_id": user.id, "email": user.email}
-
-
-@app.get("/debug/env")
-def debug_env():
-    return {
-        "COGNITO_REGION": os.getenv("COGNITO_REGION"),
-        "COGNITO_USER_POOL_ID": os.getenv("COGNITO_USER_POOL_ID"),
-        "COGNITO_APP_CLIENT_ID": os.getenv("COGNITO_APP_CLIENT_ID"),
-        "DATABASE_URL": os.getenv("DATABASE_URL"),
-    }
-
-
-# ----------------------
-# Products
-# ----------------------
-@app.get("/products", response_model=list[ProductOut])
-def list_products(
-    db: Session = Depends(get_db),
-    user_claims=Depends(get_current_user),
-):
-    # optional: ensure user exists for analytics consistency
-    ensure_user(db, user_claims)
-    db.commit()
-
-    return db.query(Product).order_by(Product.created_at.desc()).limit(50).all()
-
-
-@app.get("/products/{product_id}", response_model=ProductOut)
-def get_product(
-    product_id: str,
-    db: Session = Depends(get_db),
-    user_claims=Depends(get_current_user),
-):
-    ensure_user(db, user_claims)
-    db.commit()
-
-    p = db.query(Product).filter(Product.id == product_id).first()
-    if not p:
-        raise HTTPException(status_code=404, detail="Product not found")
-    return p
-
-
-# ----------------------
-# Interaction tracking
-# ----------------------
-@app.post("/products/{product_id}/interaction")
-def track_interaction(
-    product_id: str,
-    payload: InteractionIn,
-    db: Session = Depends(get_db),
-    user_claims=Depends(get_current_user),
-):
-    event = payload.event_type.strip().lower()
-    if event not in {"viewed", "clicked", "ordered"}:
-        raise HTTPException(
-            status_code=400,
-            detail="event_type must be one of: viewed, clicked, ordered",
-        )
-
-    # ensure user exists (FK)
-    user_id = ensure_user(db, user_claims)
-
-    # ensure product exists
-    p = db.query(Product).filter(Product.id == product_id).first()
-    if not p:
-        raise HTTPException(status_code=404, detail="Product not found")
-
-    # Save event
-    db.add(InteractionEvent(user_id=user_id, product_id=product_id, event_type=event))
-
-    # Upsert relationship row
-    up = (
-        db.query(UserProduct)
-        .filter(UserProduct.user_id == user_id, UserProduct.product_id == product_id)
-        .first()
+    model_router = ModelRouter(resolved_settings)
+    ui_executor = build_ui_executor(resolved_settings, model_router)
+    planner = PlannerAgent(model_router)
+    collect = EvidenceCollectionAgent(resolved_settings, realtime_collector)
+    review = ReviewIntelligenceAgent(model_router, rag_service)
+    visual = VisualVerificationAgent(model_router)
+    price = PriceLogisticsAgent(
+        model_router=model_router,
+        ui_executor=ui_executor,
+        stop_before_pay=resolved_settings.stop_before_pay,
+        runtime_mode=resolved_settings.runtime_mode,
+        ui_executor_backend=resolved_settings.ui_executor_backend,
     )
-    if not up:
-        up = UserProduct(user_id=user_id, product_id=product_id, last_status=event)
-        db.add(up)
-    else:
-        up.last_status = event
+    decision = DecisionAgent(model_router, resolved_settings)
 
-    if event == "ordered":
-        up.has_user_ordered_before = True
-
-    db.commit()
-    return {"ok": True}
-
-
-# ----------------------
-# Orders ("Buy" button)
-# ----------------------
-@app.post("/products/{product_id}/order", response_model=OrderOut)
-def create_order(
-    product_id: str,
-    db: Session = Depends(get_db),
-    user_claims=Depends(get_current_user),
-):
-    # ensure user exists (FK)
-    user_id = ensure_user(db, user_claims)
-
-    p = db.query(Product).filter(Product.id == product_id).first()
-    if not p:
-        raise HTTPException(status_code=404, detail="Product not found")
-
-    # Record ordered event (analytics)
-    db.add(InteractionEvent(user_id=user_id, product_id=product_id, event_type="ordered"))
-
-    # Update per-user relationship
-    up = (
-        db.query(UserProduct)
-        .filter(UserProduct.user_id == user_id, UserProduct.product_id == product_id)
-        .first()
+    orchestrator = AgentOrchestrator(
+        planner=planner,
+        collect=collect,
+        review=review,
+        visual=visual,
+        price=price,
+        decision=decision,
     )
-    if not up:
-        up = UserProduct(
-            user_id=user_id,
-            product_id=product_id,
-            last_status="ordered",
-            has_user_ordered_before=True,
-        )
-        db.add(up)
-    else:
-        up.last_status = "ordered"
-        up.has_user_ordered_before = True
 
-    # Create order record
-    order = Order(
-        user_id=user_id,
-        product_id=product_id,
-        status="initiated",
-        store_url=p.product_url,
+    sqlite_store = SQLiteSessionStore(resolved_settings.sqlite_path)
+    checkpoint_store = RedisCheckpointStore(
+        redis_url=resolved_settings.redis_url,
+        key_prefix=resolved_settings.redis_key_prefix,
     )
-    db.add(order)
+    session_service = SessionService(sqlite_store, checkpoint_store)
 
-    db.commit()
-    db.refresh(order)
-    return order
+    services = ServiceContainer(
+        settings=resolved_settings,
+        model_router=model_router,
+        rag_service=rag_service,
+        realtime_collector=realtime_collector,
+        ui_executor=ui_executor,
+        session_service=session_service,
+        orchestrator=orchestrator,
+    )
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        await session_service.initialize()
+        app.state.services = services
+        yield
+        await session_service.shutdown()
+
+    app = FastAPI(title=resolved_settings.app_name, lifespan=lifespan)
+    app.include_router(api_router)
+    return app
+
+
+app = create_app()

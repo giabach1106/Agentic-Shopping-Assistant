@@ -65,15 +65,16 @@ export default function Home() {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<
     "logged_out" | "exchanging" | "logged_in" | "error"
-  >("logged_out");
+  >(() =>
+    typeof window !== "undefined" && localStorage.getItem("id_token")
+      ? "logged_in"
+      : "logged_out"
+  );
   const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
     const url = new URL(window.location.href);
     const code = url.searchParams.get("code");
-
-    const existing = localStorage.getItem("id_token");
-    if (existing) setStatus("logged_in");
 
     if (!code) return;
 
