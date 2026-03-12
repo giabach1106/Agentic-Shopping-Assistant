@@ -91,11 +91,22 @@ class TrustScoringEngine:
         rating_count = int(rating_summary.get("ratingCount") or 0)
         source_coverage = int(collect.get("sourceCoverage") or len((review.get("sourceStats") or {}).keys()))
         visual_status = str(visual.get("status") or "NEED_MORE_EVIDENCE").upper()
+        collect_sufficiency = dict(collect.get("sufficiency") or {})
+        audit_sufficiency = dict(coverage_audit_payload.get("sufficiency") or {})
+        coverage_is_sufficient = bool(
+            collect_sufficiency.get(
+                "isSufficient",
+                audit_sufficiency.get("isSufficient", False),
+            )
+        )
+        raw_candidates = price.get("candidates")
+        candidate_count = len(raw_candidates) if isinstance(raw_candidates, list) else 0
+        has_catalog_depth = coverage_is_sufficient and candidate_count >= 5
 
-        if review_count < self._settings.min_review_count:
+        if review_count < self._settings.min_review_count and not has_catalog_depth:
             missing_evidence.append("reviewCount")
             blocking_agents.append("review")
-        if rating_count < self._settings.min_rating_count:
+        if rating_count < self._settings.min_rating_count and not has_catalog_depth:
             missing_evidence.append("ratingCount")
             blocking_agents.append("review")
         if source_coverage < self._settings.min_source_coverage:
@@ -139,17 +150,11 @@ class TrustScoringEngine:
             "freshnessSeconds": self._freshness_seconds(collect),
             "reviewCount": review_count,
             "ratingCount": rating_count,
+            "candidateCount": candidate_count,
             "missingFields": missing_evidence,
         }
-        collect_sufficiency = dict(collect.get("sufficiency") or {})
-        audit_sufficiency = dict(coverage_audit_payload.get("sufficiency") or {})
         coverage_audit = {
-            "isSufficient": bool(
-                collect_sufficiency.get(
-                    "isSufficient",
-                    audit_sufficiency.get("isSufficient", False),
-                )
-            ),
+            "isSufficient": coverage_is_sufficient,
             "missing": list(
                 collect_sufficiency.get("missing")
                 or audit_sufficiency.get("missing")
@@ -158,6 +163,7 @@ class TrustScoringEngine:
             "sourceCoverage": source_coverage,
             "reviewCount": review_count,
             "ratingCount": rating_count,
+            "candidateCount": candidate_count,
             "freshnessSeconds": evidence_stats["freshnessSeconds"],
             "cacheStatus": collect.get("cacheStatus") or coverage_audit_payload.get("cacheStatus"),
             "catalogStatus": collect.get("catalogStatus") or coverage_audit_payload.get("catalogStatus"),

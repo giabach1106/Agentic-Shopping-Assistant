@@ -549,6 +549,11 @@ class CoverageAuditorAgent:
                 }
             )
             snippets = item.get("review_snippets") or []
+            if not snippets:
+                fallback_snippet = str(item.get("ingredient_text") or "").strip()
+                if not fallback_snippet:
+                    fallback_snippet = f"Listing summary: {title}"
+                snippets = [fallback_snippet[:320]]
             if isinstance(snippets, list):
                 for index, snippet in enumerate(snippets[:2]):
                     text = str(snippet).strip()
@@ -1236,6 +1241,9 @@ class PriceLogisticsAgent:
                     continue
                 url = str(item.get("url") or "").strip()
                 if not url.startswith("http"):
+                    continue
+                lower_url = url.lower()
+                if "/sch/i.html" in lower_url or "/search?" in lower_url:
                     continue
                 title = str(item.get("title") or "").strip()
                 if not title or title.lower().startswith("unknown"):

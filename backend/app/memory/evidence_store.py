@@ -240,7 +240,19 @@ class SQLiteEvidenceStore:
                 retrieved_at
             FROM catalog_records
             WHERE {" AND ".join(clauses)}
-            ORDER BY retrieved_at DESC, updated_at DESC
+            ORDER BY
+                CASE WHEN lower(title) LIKE '% search' THEN 1 ELSE 0 END ASC,
+                CASE WHEN COALESCE(price, 0) > 0 THEN 0 ELSE 1 END ASC,
+                CASE WHEN review_snippets_json IS NOT NULL AND review_snippets_json <> '[]' THEN 0 ELSE 1 END ASC,
+                COALESCE(rating_count, 0) DESC,
+                CASE source
+                    WHEN 'amazon' THEN 0
+                    WHEN 'walmart' THEN 1
+                    WHEN 'ebay' THEN 2
+                    ELSE 3
+                END ASC,
+                retrieved_at DESC,
+                updated_at DESC
             LIMIT ?
         """
         params.append(safe_limit)
