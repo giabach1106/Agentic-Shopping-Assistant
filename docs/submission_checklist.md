@@ -8,10 +8,12 @@
 - [ ] `/history` reopens prior sessions from `GET /v1/sessions`
 - [ ] `/product/[id]` renders ingredient analysis, charts, and source references
 - [ ] Dark mode and light mode both render correctly on desktop and mobile
+- [ ] Browser preflight to `POST /v1/sessions` succeeds from the frontend origin
 
 ## Backend checks
 
 - [ ] `POST /v1/sessions` works
+- [ ] `OPTIONS /v1/sessions` returns the expected CORS headers
 - [ ] `POST /v1/chat` works
 - [ ] `POST /v1/runs/{session_id}/resume` works
 - [ ] `GET /v1/sessions/{session_id}` works

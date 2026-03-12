@@ -6,7 +6,7 @@ This build is optimized for supplements and whey protein:
 - DB-first evidence reuse before fresh crawl
 - structured reasoning timeline instead of opaque output
 - ingredient scoring with beneficial signals and red flags
-- session history, product detail, and evidence references in the UI
+- session history, product detail, charts, and evidence references in the UI
 - dark/light theme support
 
 ## Stack
@@ -23,8 +23,8 @@ This build is optimized for supplements and whey protein:
 4. Backend checks cached evidence first, then collects only when coverage is insufficient.
 5. UI renders:
    - verdict and trust score
-   - scientific score breakdown
-   - structured trace timeline
+   - scientific score radar, source-mix chart, and ABSA chart
+   - structured trace timeline and ranked evidence table
    - shortlist of products from session state
    - product detail with ingredient charts and source links
 6. Follow-up questions continue in the same session with `POST /v1/runs/{session_id}/resume`.
@@ -46,6 +46,7 @@ MOCK_MODEL=true
 AWS_REGION=us-east-1
 AGENT_SQLITE_PATH=backend/data/agent_memory.sqlite3
 AGENT_REDIS_URL=redis://localhost:6379/0
+AGENT_CORS_ALLOW_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 NEXT_PUBLIC_COGNITO_DOMAIN=your-domain.auth.us-east-1.amazoncognito.com
 NEXT_PUBLIC_COGNITO_CLIENT_ID=your-client-id
@@ -54,6 +55,7 @@ NEXT_PUBLIC_COGNITO_REDIRECT_URI=http://localhost:3000
 
 Important:
 - `NEXT_PUBLIC_*` values are consumed by the frontend.
+- `AGENT_CORS_ALLOW_ORIGINS` must include the frontend origin or browser preflight will fail.
 - `MOCK_MODEL=true` is the easiest local demo mode.
 - If Redis is unavailable, backend falls back to in-memory checkpoints.
 
@@ -102,6 +104,7 @@ This starts:
 Notes:
 - `NEXT_PUBLIC_*` values are passed into the frontend image at build time.
 - `backend/data` is mounted for SQLite persistence.
+- The backend CORS allowlist defaults to localhost frontend origins.
 
 ## API surface used by the UI
 
@@ -145,8 +148,9 @@ Find a whey isolate under $90 with third-party testing, low lactose, and no sucr
 ```
 
 Then show:
+- landing page auth/session state and theme toggle
 - session-bound chat history
 - shortlist cards on `/results`
-- trace panel and evidence metrics
+- trace panel, trust radar, source mix, and evidence ledger
 - product detail charts and ingredient flags
 - evidence reference links

@@ -42,11 +42,14 @@ Find a whey isolate under $90 with third-party testing, low lactose, and no sucr
 1. Login with Cognito on the landing page.
 2. Submit the whey prompt.
 3. On `/results`, show:
+   - minimal landing-to-session transition
    - verdict card
-   - trust score and source coverage
+   - trust score, source coverage, and evidence freshness
    - agent response panel
-   - session-bound follow-up chat
-   - shortlist cards with ingredient score
+    - session-bound follow-up chat
+   - trust radar, source mix, and ABSA charts
+   - ranked evidence ledger with promo/quality signals
+    - shortlist cards with ingredient score
 4. Open the top candidate product detail page.
 5. Show:
    - trust radar chart
@@ -63,6 +66,7 @@ Find a whey isolate under $90 with third-party testing, low lactose, and no sucr
 - The supplements lane is stronger than generic shopping because it explains ingredient quality, not just price and stars.
 - The UI does not expose raw chain-of-thought. It shows structured reasoning, blockers, metrics, and evidence links.
 - Checkout automation is intentionally constrained to a stop-before-payment handoff.
+- The frontend is resilient to both Cognito mode and guest-mode local runs; browser CORS is now part of the documented setup.
 
 ## 6. Backup script if data is incomplete
 
