@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Fingerprint, History, LogOut, ScanSearch, ShoppingBasket } from "lucide-react";
 
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -9,6 +10,7 @@ import { clearTokens } from "@/lib/auth";
 
 export function Header() {
   const shell = useAppShellState();
+  const router = useRouter();
 
   return (
     <header className="sticky top-0 z-50 border-b border-[color:var(--border)] bg-[color:var(--surface)]/88 backdrop-blur-xl">
@@ -62,7 +64,11 @@ export function Header() {
               type="button"
               onClick={() => {
                 clearTokens();
-                window.location.href = shell.logoutHref || "/";
+                if (shell.logoutHref) {
+                  window.location.href = shell.logoutHref;
+                  return;
+                }
+                router.push("/");
               }}
               className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-4 py-2 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
             >

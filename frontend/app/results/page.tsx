@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -308,19 +309,32 @@ function ResultsContent() {
     () => [...products].sort((left, right) => right.scientificScore.finalTrust - left.scientificScore.finalTrust),
     [products]
   );
+  const topProducts = useMemo(() => sortedProducts.slice(0, 10), [sortedProducts]);
 
   const selectedProduct = useMemo(() => {
     if (!recommendation?.decision?.selectedCandidate) {
-      return sortedProducts[0] ?? null;
+      return topProducts[0] ?? null;
     }
     return (
-      sortedProducts.find(
+      topProducts.find(
         (product) => product.sourceUrl === recommendation.decision?.selectedCandidate?.sourceUrl
       ) ??
-      sortedProducts[0] ??
+      topProducts[0] ??
       null
     );
-  }, [recommendation?.decision, sortedProducts]);
+  }, [recommendation?.decision, topProducts]);
+
+  const latestAssistantMessage = useMemo(
+    () =>
+      [...messages]
+        .reverse()
+        .find((message) => message.role === "assistant" && message.content.trim().length > 0),
+    [messages]
+  );
+  const agentReplyText =
+    recommendation?.reply ||
+    latestAssistantMessage?.content ||
+    "Session is active. Add one follow-up constraint to continue.";
 
   const trustRadarData = useMemo(
     () => [
@@ -452,7 +466,7 @@ function ResultsContent() {
           <div className="mt-8 grid gap-4 lg:grid-cols-2">
             <div className="rounded-[1.8rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-5">
               <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Agent response</p>
-              <p className="mt-4 text-sm leading-7 text-[color:var(--text-soft)]">{recommendation?.reply ?? "Waiting for the first decision payload."}</p>
+              <p className="mt-4 text-sm leading-7 text-[color:var(--text-soft)]">{agentReplyText}</p>
               {needsFollowUp ? <div className="mt-4 rounded-[1.3rem] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">The orchestrator needs more detail before finalizing. Reply in the chat panel to continue the same run.</div> : null}
             </div>
             <div className="rounded-[1.8rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-5">
@@ -464,9 +478,64 @@ function ResultsContent() {
               </div>
             </div>
           </div>
+          <div className="mt-8">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Immediate shortlist</p>
+              <span className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--text-muted)]">
+                {topProducts.length} products
+              </span>
+            </div>
+            {topProducts.length ? (
+              <div className="grid gap-4 md:grid-cols-2">
+                {topProducts.map((product) => {
+                  const imageUrl =
+                    typeof product.imageUrl === "string" && product.imageUrl.startsWith("http")
+                      ? product.imageUrl
+                      : null;
+                  return (
+                    <article key={product.productId} className="overflow-hidden rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)]">
+                      <div className="relative h-44 w-full bg-[color:var(--surface-muted)]">
+                        {imageUrl ? (
+                          <Image
+                            src={imageUrl}
+                            alt={product.title}
+                            fill
+                            className="object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-full items-center justify-center text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                            No image
+                          </div>
+                        )}
+                      </div>
+                      <div className="space-y-3 p-4">
+                        <p className="text-xs uppercase tracking-[0.22em] text-[color:var(--text-muted)]">{product.storeName}</p>
+                        <h3 className="line-clamp-2 text-lg font-semibold leading-7 text-[color:var(--text-strong)]">{product.title}</h3>
+                        <div className="flex flex-wrap items-center gap-3 text-sm text-[color:var(--text-soft)]">
+                          <span className="font-semibold text-[color:var(--text-strong)]">${product.price.toFixed(2)}</span>
+                          <span>{product.rating ? product.rating.toFixed(1) : "n/a"} stars</span>
+                        </div>
+                        <Link
+                          href={`/product/${product.productId}?session=${activeSessionId}`}
+                          className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-4 py-2 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
+                        >
+                          Analyze product
+                          <ChevronRight className="h-4 w-4" />
+                        </Link>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text-soft)]">
+                No product cards available yet. Continue chat to unlock candidate extraction.
+              </div>
+            )}
+          </div>
         </div>
 
-        <aside className="rounded-[2.4rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
+        <aside className="flex flex-col rounded-[2.4rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)] xl:sticky xl:top-24 xl:h-[calc(100vh-7.5rem)]">
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Live session</p>
@@ -474,7 +543,7 @@ function ResultsContent() {
             </div>
             <div className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--text-muted)]">{messages.length} messages</div>
           </div>
-          <div ref={chatScrollRef} className="mt-6 flex max-h-[32rem] flex-col gap-3 overflow-y-auto pr-1">
+          <div ref={chatScrollRef} className="mt-6 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
             {messages.map((message, index) => {
               const isUser = message.role === "user";
               const meta = !isUser && message.meta && typeof message.meta === "object"
@@ -574,9 +643,9 @@ function ResultsContent() {
             ) : <p className="text-sm leading-7 text-[color:var(--text-soft)]">No candidate products are available yet for this session.</p>}
           </Panel>
 
-          <Panel eyebrow="Shortlist" title={`Candidate products - ${sortedProducts.length}`}>
+          <Panel eyebrow="Shortlist" title={`Candidate products - ${topProducts.length}`}>
             <div className="space-y-5">
-              {sortedProducts.map((product) => (
+              {topProducts.map((product) => (
                 <ProductCard key={product.productId} product={product} sessionId={activeSessionId ?? ""} />
               ))}
             </div>

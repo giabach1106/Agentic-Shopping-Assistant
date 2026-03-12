@@ -113,6 +113,7 @@ export interface SessionProduct {
   storeName: string;
   source: string;
   sourceUrl: string;
+  imageUrl?: string | null;
   price: number;
   rating: number | null;
   shippingETA: string;

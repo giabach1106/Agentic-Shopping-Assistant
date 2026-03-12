@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { ArrowUpRight, BadgeCheck, FlaskConical, ShieldAlert, Star } from "lucide-react";
 
@@ -20,8 +21,27 @@ export function ProductCard({
   product: SessionProduct;
   sessionId: string;
 }) {
+  const imageUrl = typeof product.imageUrl === "string" && product.imageUrl.startsWith("http")
+    ? product.imageUrl
+    : null;
+
   return (
-    <article className="grid gap-5 rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)] transition hover:-translate-y-0.5 hover:shadow-[var(--shadow-strong)] lg:grid-cols-[1.3fr_0.9fr]">
+    <article className="grid gap-5 rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)] transition hover:-translate-y-0.5 hover:shadow-[var(--shadow-strong)] lg:grid-cols-[0.38fr_0.92fr_0.8fr]">
+      <div className="overflow-hidden rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-muted)]">
+        {imageUrl ? (
+          <Image
+            src={imageUrl}
+            alt={product.title}
+            width={360}
+            height={360}
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <div className="flex h-full min-h-48 items-center justify-center px-4 text-center text-xs uppercase tracking-[0.22em] text-[color:var(--text-muted)]">
+            No image
+          </div>
+        )}
+      </div>
       <div className="space-y-4">
         <div className="flex items-start justify-between gap-4">
           <div>

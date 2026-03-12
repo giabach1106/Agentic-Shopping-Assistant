@@ -7,6 +7,7 @@ export const THEME_EVENT_NAME = "agentcart:theme";
 export interface TokenClaims {
   sub?: string;
   email?: string;
+  exp?: number;
   [key: string]: unknown;
 }
 
@@ -14,12 +15,14 @@ function getCognitoConfig() {
   const domain = process.env.NEXT_PUBLIC_COGNITO_DOMAIN?.trim();
   const clientId = process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID?.trim();
   const redirectUri = process.env.NEXT_PUBLIC_COGNITO_REDIRECT_URI?.trim();
+  const logoutUri =
+    process.env.NEXT_PUBLIC_COGNITO_LOGOUT_URI?.trim() || redirectUri;
 
   if (!domain || !clientId || !redirectUri) {
     return null;
   }
 
-  return { domain, clientId, redirectUri };
+  return { domain, clientId, redirectUri, logoutUri };
 }
 
 export function getAuthConfigurationError() {
@@ -96,8 +99,29 @@ export function clearTokens() {
   window.dispatchEvent(new Event(AUTH_EVENT_NAME));
 }
 
+function clearTokensSilently() {
+  localStorage.removeItem(ID_TOKEN_KEY);
+  localStorage.removeItem(ACCESS_TOKEN_KEY);
+}
+
 export function getIdToken() {
-  return typeof window === "undefined" ? null : localStorage.getItem(ID_TOKEN_KEY);
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const token = localStorage.getItem(ID_TOKEN_KEY);
+  if (!token) {
+    return null;
+  }
+  const claims = decodeTokenClaims(token);
+  if (!claims) {
+    clearTokensSilently();
+    return null;
+  }
+  if (typeof claims.exp === "number" && claims.exp <= Math.floor(Date.now() / 1000)) {
+    clearTokensSilently();
+    return null;
+  }
+  return token;
 }
 
 export function isAuthenticated() {
@@ -109,7 +133,8 @@ export function logoutUrl() {
   if (!config) {
     throw new Error("Missing Cognito frontend environment variables.");
   }
-  return `https://${config.domain}/logout?client_id=${encodeURIComponent(config.clientId)}&logout_uri=${encodeURIComponent(config.redirectUri)}`;
+  const logoutUri = config.logoutUri || config.redirectUri;
+  return `https://${config.domain}/logout?client_id=${encodeURIComponent(config.clientId)}&logout_uri=${encodeURIComponent(logoutUri)}`;
 }
 
 export function themeStorageKey() {
@@ -150,5 +175,8 @@ export function tryBuildAuthorizeUrl() {
 }
 
 export function tryLogoutUrl() {
+  if (process.env.NEXT_PUBLIC_USE_COGNITO_HOSTED_LOGOUT?.trim() !== "true") {
+    return null;
+  }
   return getCognitoConfig() ? logoutUrl() : null;
 }

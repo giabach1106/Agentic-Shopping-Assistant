@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
@@ -229,6 +230,17 @@ function ProductDetailContent() {
 
       <section className="grid gap-6 xl:grid-cols-[1.08fr_0.92fr]">
         <div className="rounded-[2.5rem] border border-[color:var(--border-strong)] bg-[color:var(--surface)] p-7 shadow-[var(--shadow-strong)]">
+          {product.imageUrl ? (
+            <div className="mb-6 overflow-hidden rounded-[1.7rem] border border-[color:var(--border)] bg-[color:var(--surface-muted)]">
+              <Image
+                src={product.imageUrl}
+                alt={product.title}
+                width={1200}
+                height={560}
+                className="h-64 w-full object-cover"
+              />
+            </div>
+          ) : null}
           <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">{product.storeName}</p>
           <h1 className="mt-4 text-4xl font-semibold tracking-[-0.05em] text-[color:var(--text-strong)] md:text-5xl">
             {product.title}
