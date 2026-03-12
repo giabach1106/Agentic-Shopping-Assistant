@@ -38,9 +38,9 @@ This build is optimized for supplements and whey protein:
 
 ## Local setup
 
-### 1. Backend env
+### 1. Environment
 
-Create root `.env` or export equivalent values:
+Use one root `.env` as the single source of truth for both backend and frontend:
 
 ```env
 MOCK_MODEL=true
@@ -57,6 +57,8 @@ NEXT_PUBLIC_COGNITO_REDIRECT_URI=http://localhost:3000
 
 Important:
 - `NEXT_PUBLIC_*` values are consumed by the frontend.
+- Frontend now falls back to `../.env` when running from `frontend/`, so `frontend/.env.local` is optional.
+- Backend now falls back to root `.env` when running from `backend/`, so `backend/.env` is optional.
 - `AGENT_CORS_ALLOW_ORIGINS` must include the frontend origin or browser preflight will fail.
 - `AGENT_REQUIRE_AUTH=true` enforces strict bearer auth for `/v1/*`.
 - `MOCK_MODEL=true` is the easiest local demo mode.

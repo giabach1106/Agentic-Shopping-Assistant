@@ -12,7 +12,7 @@ This frontend is a typed Next.js client for the AgentCart backend.
 
 ## Required env
 
-Create `frontend/.env.local`:
+Create root `.env` (repository root):
 
 ```env
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
@@ -58,3 +58,4 @@ npm run start
 - The backend enforces bearer token presence and required claims for protected routes.
 - `NEXT_PUBLIC_*` variables must be available when building Docker images because they are inlined into the client bundle.
 - Docker build arg `REQUIRE_COGNITO_ENV=true` can be used in CI to hard-fail when Cognito vars are missing.
+- Frontend now falls back to loading `../.env`, so `frontend/.env.local` is optional.

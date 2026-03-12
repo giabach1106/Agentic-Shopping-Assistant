@@ -5,6 +5,31 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+def _strip_wrapping_quotes(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
+
+
+def _load_env_file_defaults(env_path: Path) -> None:
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        os.environ[key] = _strip_wrapping_quotes(value.strip())
+
+
 def _as_bool(value: str | None, default: bool) -> bool:
     if value is None:
         return default
@@ -59,6 +84,9 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        repo_root = Path(__file__).resolve().parents[3]
+        _load_env_file_defaults(repo_root / ".env")
+
         backend_root = Path(__file__).resolve().parents[2]
         default_db_path = backend_root / "data" / "agent_memory.sqlite3"
 
