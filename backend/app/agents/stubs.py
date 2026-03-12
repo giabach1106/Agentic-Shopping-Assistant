@@ -24,6 +24,123 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+_SUPPLEMENT_TITLE_KEYWORDS = (
+    "whey",
+    "isolate",
+    "protein",
+    "supplement",
+    "creatine",
+    "casein",
+    "collagen",
+    "pre workout",
+    "pre-workout",
+    "electrolyte",
+    "vitamin",
+    "omega",
+    "probiotic",
+    "bcaa",
+    "eaa",
+    "glutamine",
+)
+
+_OFF_TOPIC_PRODUCT_HINTS = (
+    "nba",
+    "doubleheader",
+    "movie",
+    "wedding",
+    "iphone",
+    "laptop",
+    "chair",
+)
+
+_GENERIC_CATEGORY_PHRASES = {
+    "another",
+    "another one",
+    "one",
+    "it",
+    "this",
+    "that",
+    "something",
+}
+
+_NOISE_TERMS = {
+    "under",
+    "over",
+    "with",
+    "without",
+    "from",
+    "that",
+    "this",
+    "best",
+    "good",
+    "days",
+    "day",
+    "stars",
+    "star",
+    "delivery",
+    "delivered",
+}
+
+
+def _tokenize_terms(value: str) -> list[str]:
+    return [
+        token
+        for token in re.split(r"[^a-z0-9]+", value.lower())
+        if len(token) >= 3 and token not in _NOISE_TERMS
+    ]
+
+
+def _constraint_focus_terms(constraints: dict[str, Any]) -> list[str]:
+    collected: list[str] = []
+    category = str(constraints.get("category") or "").strip()
+    if category:
+        collected.extend(_tokenize_terms(category))
+
+    for key in ("mustHave", "niceToHave"):
+        values = constraints.get(key) or []
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            text = str(value).strip()
+            if text:
+                collected.extend(_tokenize_terms(text))
+
+    deduped: list[str] = []
+    for item in collected:
+        if item not in deduped:
+            deduped.append(item)
+    return deduped
+
+
+def _is_candidate_title_relevant(title: str, constraints: dict[str, Any]) -> bool:
+    lower = title.lower()
+    if any(hint in lower for hint in _OFF_TOPIC_PRODUCT_HINTS):
+        return False
+    if not any(keyword in lower for keyword in _SUPPLEMENT_TITLE_KEYWORDS):
+        return False
+    focus_terms = _constraint_focus_terms(constraints)
+    if focus_terms and not any(term in lower for term in focus_terms):
+        return False
+
+    excludes = constraints.get("exclude") or []
+    if isinstance(excludes, list):
+        for value in excludes:
+            text = str(value).strip().lower()
+            if text and text in lower:
+                return False
+    return True
+
+
+def _constraint_match_score(title: str, constraints: dict[str, Any]) -> int:
+    lower = title.lower()
+    score = 2 if any(keyword in lower for keyword in _SUPPLEMENT_TITLE_KEYWORDS) else 0
+    focus_terms = _constraint_focus_terms(constraints)
+    for term in focus_terms:
+        if term in lower:
+            score += 1
+    return score
+
+
 class PlannerAgent:
     _critical_fields = ("category", "budgetMax", "minRating", "deliveryDeadline")
 
@@ -184,6 +301,8 @@ class PlannerAgent:
             candidate = intent_match.group(1).strip()
             candidate = re.sub(r"\s+", " ", candidate)
             candidate = re.sub(r"^(?:a|an|the)\s+", "", candidate)
+            if candidate in _GENERIC_CATEGORY_PHRASES:
+                candidate = ""
             if 2 <= len(candidate) <= 80:
                 category = candidate
 
@@ -227,7 +346,8 @@ class PlannerAgent:
                 "saturday",
                 "sunday",
             }:
-                category = stripped
+                if stripped not in _GENERIC_CATEGORY_PHRASES:
+                    category = stripped
 
         budget_match = re.search(r"(?:under|below|<=?)\s*\$?(\d+(?:\.\d+)?)", lower)
         budget_max = float(budget_match.group(1)) if budget_match else None
@@ -246,6 +366,17 @@ class PlannerAgent:
         deadline_match = re.search(r"delivered by\s+([a-z0-9 ,]+)", lower)
         delivery_deadline = deadline_match.group(1).strip() if deadline_match else None
         if delivery_deadline is None:
+            by_day_match = re.search(
+                r"(?:by|before)\s+(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+                lower,
+            )
+            if by_day_match:
+                delivery_deadline = by_day_match.group(1).strip()
+        if delivery_deadline is None:
+            in_days_match = re.search(r"(?:in|within)\s+(\d{1,2})\s+days?", lower)
+            if in_days_match:
+                delivery_deadline = f"in {int(in_days_match.group(1))} days"
+        if delivery_deadline is None:
             direct_deadline_match = re.fullmatch(
                 r"(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
                 lower.strip(),
@@ -258,6 +389,25 @@ class PlannerAgent:
             must_have.append("ergonomic")
         if "dorm" in lower:
             must_have.append("dorm-friendly size")
+        supplement_signals = [
+            ("third-party tested", "third-party tested"),
+            ("third party tested", "third-party tested"),
+            ("third party testing", "third-party tested"),
+            ("low lactose", "low lactose"),
+            ("lactose free", "low lactose"),
+            ("whey isolate", "whey isolate"),
+            ("grass fed", "grass-fed"),
+            ("no sucralose", "no sucralose"),
+            ("no artificial sweetener", "no artificial sweeteners"),
+            ("no proprietary blend", "no proprietary blends"),
+        ]
+        for phrase, normalized in supplement_signals:
+            if phrase in lower and normalized not in must_have:
+                must_have.append(normalized)
+        if "whey" in lower and "whey" not in must_have:
+            must_have.append("whey")
+        if "protein" in lower and "protein" not in must_have:
+            must_have.append("protein")
 
         exclude: list[str] = []
         exclude_match = re.findall(r"(?:not|exclude)\s+([a-z0-9 -]+)", lower)
@@ -1057,8 +1207,18 @@ class PriceLogisticsAgent:
         )
 
         source_priority = {"amazon": 0, "walmart": 1, "ebay": 2}
-        ranked_candidates: list[tuple[float, float, int, dict[str, Any]]] = []
+        ranked_candidates: list[tuple[int, float, float, int, dict[str, Any]]] = []
         candidates: list[dict[str, Any]] = []
+        budget_max = constraints.get("budgetMax")
+        try:
+            budget_limit = float(budget_max) if budget_max is not None else None
+        except (TypeError, ValueError):
+            budget_limit = None
+        min_rating_raw = constraints.get("minRating")
+        try:
+            min_rating = float(min_rating_raw) if min_rating_raw is not None else None
+        except (TypeError, ValueError):
+            min_rating = None
         if isinstance(collection, dict):
             for item in collection.get("products", []):
                 if not isinstance(item, dict):
@@ -1069,13 +1229,25 @@ class PriceLogisticsAgent:
                 title = str(item.get("title") or "").strip()
                 if not title or title.lower().startswith("unknown"):
                     continue
+                if not _is_candidate_title_relevant(title, constraints):
+                    continue
                 source = str(item.get("source") or "").strip().lower()
                 rating = float(item.get("avg_rating") or 0.0)
+                price = float(item.get("price") or 0.0)
+                if price <= 0:
+                    continue
+                if budget_limit is not None and price > (budget_limit * 1.15):
+                    continue
+                if min_rating is not None and rating > 0 and rating < min_rating:
+                    continue
+                match_score = _constraint_match_score(title, constraints)
+                if match_score <= 0:
+                    continue
                 candidates.append(
                     {
                         "title": title,
                         "sourceUrl": url,
-                        "price": float(item.get("price") or 1.0),
+                        "price": price,
                         "rating": rating,
                         "shippingETA": str(item.get("shipping_eta") or "unknown"),
                         "returnPolicy": str(item.get("return_policy") or "unknown"),
@@ -1085,8 +1257,9 @@ class PriceLogisticsAgent:
                 )
                 ranked_candidates.append(
                     (
+                        -match_score,
                         -rating,
-                        float(item.get("price") or 1.0),
+                        price,
                         source_priority.get(source, 99),
                         candidates[-1],
                     )
@@ -1095,9 +1268,9 @@ class PriceLogisticsAgent:
         if ranked_candidates:
             candidates = [
                 item
-                for _, _, _, item in sorted(
+                for _, _, _, _, item in sorted(
                     ranked_candidates,
-                    key=lambda entry: (entry[0], entry[1], entry[2]),
+                    key=lambda entry: (entry[0], entry[1], entry[2], entry[3]),
                 )
             ][:10]
 
