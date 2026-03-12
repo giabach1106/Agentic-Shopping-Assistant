@@ -19,6 +19,7 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 NEXT_PUBLIC_COGNITO_DOMAIN=your-domain.auth.us-east-1.amazoncognito.com
 NEXT_PUBLIC_COGNITO_CLIENT_ID=your-client-id
 NEXT_PUBLIC_COGNITO_REDIRECT_URI=http://localhost:3000
+NEXT_PUBLIC_USE_COGNITO_HOSTED_LOGOUT=false
 ```
 
 Backend note:
@@ -59,3 +60,4 @@ npm run start
 - `NEXT_PUBLIC_*` variables must be available when building Docker images because they are inlined into the client bundle.
 - Docker build arg `REQUIRE_COGNITO_ENV=true` can be used in CI to hard-fail when Cognito vars are missing.
 - Frontend now falls back to loading `../.env`, so `frontend/.env.local` is optional.
+- Set `NEXT_PUBLIC_USE_COGNITO_HOSTED_LOGOUT=true` only when Cognito app client has a valid allowed sign-out URL.

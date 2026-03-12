@@ -53,6 +53,7 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 NEXT_PUBLIC_COGNITO_DOMAIN=your-domain.auth.us-east-1.amazoncognito.com
 NEXT_PUBLIC_COGNITO_CLIENT_ID=your-client-id
 NEXT_PUBLIC_COGNITO_REDIRECT_URI=http://localhost:3000
+NEXT_PUBLIC_USE_COGNITO_HOSTED_LOGOUT=false
 ```
 
 Important:
