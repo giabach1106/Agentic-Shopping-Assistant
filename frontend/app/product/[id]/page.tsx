@@ -1,287 +1,416 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { motion } from 'motion/react';
-import { Star, Clock, ShieldCheck, AlertCircle, CheckCircle2, ExternalLink, ArrowLeft, ThumbsUp, ThumbsDown, MessageSquare, Info, Activity } from 'lucide-react';
-import Link from 'next/link';
-import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer } from 'recharts';
+import Link from "next/link";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useParams, useSearchParams } from "next/navigation";
+import {
+  ArrowLeft,
+  ArrowUpRight,
+  BadgeCheck,
+  ExternalLink,
+  FlaskConical,
+  LoaderCircle,
+  ShieldAlert,
+  ShieldCheck,
+} from "lucide-react";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  PolarAngleAxis,
+  PolarGrid,
+  PolarRadiusAxis,
+  Radar,
+  RadarChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
-export default function ProductDetail() {
-  const [activeTab, setActiveTab] = useState('scoring');
+import { TracePanel } from "@/components/trace-panel";
+import { getSessionProducts, getStoredSessionId } from "@/lib/api-client";
+import { isAuthenticated, tryBuildAuthorizeUrl } from "@/lib/auth";
+import type { SessionProduct } from "@/lib/contracts";
 
-  // Mock data
-  const chartData = [
-    { subject: 'Power', score: 95, fullMark: 100 },
-    { subject: 'Control', score: 75, fullMark: 100 },
-    { subject: 'Comfort', score: 60, fullMark: 100 },
-    { subject: 'Spin', score: 85, fullMark: 100 },
-    { subject: 'Maneuverability', score: 80, fullMark: 100 },
-    { subject: 'Stability', score: 90, fullMark: 100 },
-  ];
+function scoreTone(score: number) {
+  if (score >= 80) {
+    return "text-emerald-600 dark:text-emerald-300";
+  }
+  if (score >= 60) {
+    return "text-amber-600 dark:text-amber-300";
+  }
+  return "text-rose-600 dark:text-rose-300";
+}
 
-  const product = {
-    id: '1',
-    title: 'Babolat Pure Drive Tennis Racket',
-    store: 'Dick\'s Sporting Goods',
-    price: 249.00,
-    rating: 4.8,
-    reviews: 342,
-    delivery: 'Tomorrow',
-    score: 98,
-    image: 'https://picsum.photos/seed/racket1/800/800',
-    risk: 'low',
-    description: 'The iconic Babolat Pure Drive offers explosive power and great feel. Widely used by professionals and club players alike, it features the new HTR System and SWX Pure Feel technology.',
-    scoreBreakdown: [
-      { factor: 'Price Match', score: 100, weight: '40%' },
-      { factor: 'Rating Quality', score: 95, weight: '30%' },
-      { factor: 'Delivery Speed', score: 100, weight: '20%' },
-      { factor: 'Seller Trust', score: 90, weight: '10%' },
-    ],
-    reviewSummary: {
-      pros: ['Incredible free power on serves and groundstrokes', 'Large, forgiving sweet spot', 'Great maneuverability at the net'],
-      cons: ['Can be stiff on the arm for players with tennis elbow', 'Control can be erratic if you overhit'],
-      sources: [
-        { name: 'Tennis Warehouse', count: 156, sentiment: 'positive' },
-        { name: 'Reddit', count: 89, sentiment: 'mixed', note: 'r/10s generally recommends it but warns about stiffness.' },
-        { name: 'TikTok', count: 45, sentiment: 'positive', warning: 'Some videos flagged as possible paid promotion by Babolat.' }
-      ]
+function ProductDetailContent() {
+  const params = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
+  const sessionId = searchParams.get("session") || getStoredSessionId();
+  const loginHref = tryBuildAuthorizeUrl();
+
+  const [product, setProduct] = useState<SessionProduct | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      if (!isAuthenticated()) {
+        if (!cancelled) {
+          setError("Login with Cognito before opening product detail.");
+          setLoading(false);
+        }
+        return;
+      }
+
+      if (!sessionId) {
+        if (!cancelled) {
+          setError("Missing session id for this product detail view.");
+          setLoading(false);
+        }
+        return;
+      }
+
+      try {
+        const response = await getSessionProducts(sessionId);
+        const match = response.items.find((item) => item.productId === params.id) ?? null;
+        if (!cancelled) {
+          setProduct(match);
+          if (!match) {
+            setError("Product not found in the selected session.");
+          }
+        }
+      } catch (nextError) {
+        if (!cancelled) {
+          setError(nextError instanceof Error ? nextError.message : "Failed to load product detail.");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
     }
-  };
+
+    void load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [params.id, sessionId]);
+
+  const radarData = useMemo(() => {
+    if (!product) {
+      return [];
+    }
+    return [
+      { metric: "Rating", value: product.scientificScore.ratingReliability },
+      { metric: "Authenticity", value: product.scientificScore.spamAuthenticity },
+      { metric: "ABSA", value: product.scientificScore.absaAlignment },
+      { metric: "Visual", value: product.scientificScore.visualReliability },
+      { metric: "Final", value: product.scientificScore.finalTrust },
+    ];
+  }, [product]);
+
+  const ingredientBars = useMemo(() => {
+    if (!product) {
+      return [];
+    }
+    return [
+      { name: "Beneficial", value: product.ingredientAnalysis.beneficialSignals.length },
+      { name: "Red flags", value: product.ingredientAnalysis.redFlags.length },
+      { name: "Refs", value: product.ingredientAnalysis.references.length },
+    ];
+  }, [product]);
+
+  const evidenceBars = useMemo(() => {
+    if (!product) {
+      return [];
+    }
+    return [
+      { name: "Coverage", value: product.evidenceStats.sourceCoverage },
+      { name: "Reviews", value: product.evidenceStats.reviewCount },
+      { name: "Ratings", value: product.evidenceStats.ratingCount },
+    ];
+  }, [product]);
+
+  const referenceLinks = useMemo(() => {
+    if (!product) {
+      return [];
+    }
+    return [...new Set([...product.evidenceRefs, ...product.ingredientAnalysis.references])];
+  }, [product]);
+
+  if (loading) {
+    return (
+      <div className="mx-auto flex min-h-[calc(100vh-10rem)] w-full max-w-7xl items-center justify-center px-4 py-12 md:px-8">
+        <LoaderCircle className="h-8 w-8 animate-spin text-[color:var(--accent)]" />
+      </div>
+    );
+  }
+
+  if (!product) {
+    return (
+      <div className="mx-auto flex min-h-[calc(100vh-10rem)] w-full max-w-4xl items-center justify-center px-4 py-12 md:px-8">
+        <div className="w-full rounded-[2rem] border border-amber-500/20 bg-amber-500/10 p-8 shadow-[var(--shadow-soft)]">
+          <p className="text-xs uppercase tracking-[0.28em] text-amber-700 dark:text-amber-300">Detail unavailable</p>
+          <p className="mt-4 text-sm leading-7 text-[color:var(--text-soft)]">{error ?? "No product detail available."}</p>
+          <div className="mt-6 flex flex-wrap gap-3">
+            {loginHref ? (
+              <a
+                href={loginHref}
+                className="rounded-full bg-[color:var(--accent)] px-4 py-3 text-sm font-medium text-white transition hover:opacity-90"
+              >
+                Login with Cognito
+              </a>
+            ) : null}
+            <Link
+              href={sessionId ? `/results?session=${sessionId}` : "/results"}
+              className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-4 py-3 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back to results
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex-1 bg-zinc-50 pb-20">
-      <div className="bg-white border-b border-zinc-200 sticky top-16 z-40">
-        <div className="container mx-auto px-4 py-3 max-w-7xl">
-          <Link href="/results" className="inline-flex items-center gap-2 text-sm font-medium text-zinc-500 hover:text-zinc-900 transition-colors">
-            <ArrowLeft className="w-4 h-4" />
-            Back to Results
-          </Link>
-        </div>
+    <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-8 md:px-8 md:py-12">
+      <div className="flex flex-wrap items-center gap-3">
+        <Link
+          href={sessionId ? `/results?session=${sessionId}` : "/results"}
+          className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-2 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to session
+        </Link>
+        <span className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-2 text-xs uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
+          Product analysis
+        </span>
       </div>
 
-      <div className="container mx-auto px-4 py-8 max-w-7xl">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          
-          {/* Left Column: Image & Basic Info */}
-          <div className="lg:col-span-1 space-y-6">
-            <div className="bg-white rounded-xl border border-zinc-200 overflow-hidden shadow-sm p-6">
-              <div className="aspect-square bg-zinc-100 rounded-xl mb-6 relative">
-                <img src={product.image} alt={product.title} className="w-full h-full object-cover mix-blend-multiply rounded-xl" />
-                <div className="absolute top-4 left-4 flex flex-col items-center justify-center w-16 h-16 rounded-xl bg-orange-50 border-2 border-orange-100 text-orange-700 font-bold text-2xl shadow-sm">
-                  {product.score}
-                  <span className="text-[8px] font-bold uppercase tracking-wider mt-0.5">Match</span>
-                </div>
-              </div>
-              
-              <div className="flex items-center gap-2 mb-3">
-                <span className="text-xs font-bold uppercase tracking-wider text-zinc-500">{product.store}</span>
-                <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">
-                  <ShieldCheck className="w-3 h-3" /> Low Risk
-                </span>
-              </div>
-              
-              <h1 className="text-2xl font-bold text-zinc-900 mb-4">{product.title}</h1>
-              
-              <div className="flex flex-wrap items-center gap-4 text-sm text-zinc-600 mb-6 pb-6 border-b border-zinc-100">
-                <div className="font-bold text-3xl text-zinc-900">${product.price.toFixed(2)}</div>
-                <div className="flex items-center gap-1">
-                  <Star className="w-5 h-5 fill-amber-400 text-amber-400" />
-                  <span className="font-medium text-zinc-900 text-lg">{product.rating}</span>
-                  <span className="text-zinc-400">({product.reviews})</span>
-                </div>
-              </div>
+      <section className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
+        <div className="rounded-[2.4rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-7 shadow-[var(--shadow-strong)]">
+          <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">{product.storeName}</p>
+          <h1 className="mt-4 text-4xl font-semibold tracking-[-0.04em] text-[color:var(--text-strong)] md:text-5xl">
+            {product.title}
+          </h1>
+          <p className="mt-4 max-w-3xl text-sm leading-8 text-[color:var(--text-soft)]">
+            {product.ingredientAnalysis.summary}
+          </p>
 
-              <div className="space-y-3 mb-6">
-                <div className="flex items-center gap-3 text-sm text-zinc-700">
-                  <Clock className="w-5 h-5 text-zinc-400" />
-                  <span>Delivery by <span className="font-medium text-zinc-900">{product.delivery}</span></span>
-                </div>
-                <div className="flex items-center gap-3 text-sm text-zinc-700">
-                  <CheckCircle2 className="w-5 h-5 text-zinc-400" />
-                  <span>Free returns within 30 days</span>
-                </div>
-              </div>
-
-              <button onClick={() => window.open('https://amazon.com', '_blank')} className="w-full py-4 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-medium transition-colors flex items-center justify-center gap-2 text-lg">
-                Buy on {product.store}
-                <ExternalLink className="w-5 h-5" />
-              </button>
-              
-              <button onClick={() => alert('Added to shortlist!')} className="w-full mt-3 py-3 bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-900 rounded-xl font-medium transition-colors text-sm">
-                Save to Shortlist
-              </button>
+          <div className="mt-8 grid gap-4 md:grid-cols-4">
+            <div className="rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Price</p>
+              <p className="mt-2 text-3xl font-semibold text-[color:var(--text-strong)]">${product.price.toFixed(2)}</p>
+            </div>
+            <div className="rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Trust</p>
+              <p className={`mt-2 text-3xl font-semibold ${scoreTone(product.scientificScore.finalTrust)}`}>
+                {product.scientificScore.finalTrust}
+              </p>
+            </div>
+            <div className="rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Ingredient score</p>
+              <p className={`mt-2 text-3xl font-semibold ${scoreTone(product.ingredientAnalysis.score)}`}>
+                {product.ingredientAnalysis.score}
+              </p>
+            </div>
+            <div className="rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Protein source</p>
+              <p className="mt-2 text-lg font-semibold text-[color:var(--text-strong)]">
+                {product.ingredientAnalysis.proteinSource}
+              </p>
             </div>
           </div>
 
-          {/* Right Column: Analysis */}
-          <div className="lg:col-span-2 space-y-6">
-            
-            {/* Tabs */}
-            <div className="flex items-center gap-2 border-b border-zinc-200 pb-px">
-              {['scoring', 'reviews'].map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={`px-4 py-2.5 text-sm font-medium capitalize border-b-2 transition-colors ${
-                    activeTab === tab 
-                      ? 'border-orange-600 text-orange-600' 
-                      : 'border-transparent text-zinc-500 hover:text-zinc-700 hover:border-zinc-300'
-                  }`}
+          <div className="mt-8 flex flex-wrap gap-3">
+            <a
+              href={product.sourceUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 rounded-full bg-[color:var(--accent)] px-5 py-3 text-sm font-medium text-white transition hover:opacity-90"
+            >
+              Open merchant
+              <ExternalLink className="h-4 w-4" />
+            </a>
+            <div className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text-strong)]">
+              {product.checkoutReady ? <ShieldCheck className="h-4 w-4 text-emerald-500" /> : <ShieldAlert className="h-4 w-4 text-amber-500" />}
+              {product.checkoutReady ? "Checkout-ready handoff" : "Needs extra checkout checks"}
+            </div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text-strong)]">
+              <BadgeCheck className="h-4 w-4 text-[color:var(--accent)]" />
+              {product.shippingETA}
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-[2.4rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
+          <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Scientific scoring</p>
+          <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Trust profile radar</h2>
+          <div className="mt-6 h-80">
+            <ResponsiveContainer width="100%" height="100%">
+              <RadarChart data={radarData}>
+                <PolarGrid stroke="var(--border)" />
+                <PolarAngleAxis dataKey="metric" tick={{ fill: "currentColor", fontSize: 12 }} />
+                <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
+                <Radar
+                  dataKey="value"
+                  stroke="var(--accent)"
+                  fill="var(--accent)"
+                  fillOpacity={0.22}
+                />
+              </RadarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </section>
+
+      <section className="grid gap-8 xl:grid-cols-[1.1fr_0.9fr]">
+        <div className="space-y-8">
+          <div className="rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
+            <div className="mb-5 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Ingredients</p>
+                <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Signals and flags</h2>
+              </div>
+              <FlaskConical className="h-5 w-5 text-[color:var(--accent)]" />
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="rounded-[1.7rem] border border-emerald-500/20 bg-emerald-500/10 p-5">
+                <p className="text-xs uppercase tracking-[0.2em] text-emerald-700 dark:text-emerald-300">Beneficial</p>
+                <div className="mt-4 space-y-3">
+                  {product.ingredientAnalysis.beneficialSignals.map((signal) => (
+                    <div key={`${signal.ingredient}-${signal.note}`} className="rounded-[1.2rem] bg-[color:var(--surface)] px-4 py-3">
+                      <p className="text-sm font-semibold text-[color:var(--text-strong)]">{signal.ingredient}</p>
+                      <p className="mt-1 text-sm text-[color:var(--text-soft)]">{signal.note}</p>
+                    </div>
+                  ))}
+                  {!product.ingredientAnalysis.beneficialSignals.length ? (
+                    <p className="text-sm text-[color:var(--text-soft)]">No beneficial signals detected.</p>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="rounded-[1.7rem] border border-rose-500/20 bg-rose-500/10 p-5">
+                <p className="text-xs uppercase tracking-[0.2em] text-rose-700 dark:text-rose-300">Red flags</p>
+                <div className="mt-4 space-y-3">
+                  {product.ingredientAnalysis.redFlags.map((signal) => (
+                    <div key={`${signal.ingredient}-${signal.note}`} className="rounded-[1.2rem] bg-[color:var(--surface)] px-4 py-3">
+                      <p className="text-sm font-semibold text-[color:var(--text-strong)]">{signal.ingredient}</p>
+                      <p className="mt-1 text-sm text-[color:var(--text-soft)]">{signal.note}</p>
+                    </div>
+                  ))}
+                  {!product.ingredientAnalysis.redFlags.length ? (
+                    <p className="text-sm text-[color:var(--text-soft)]">No material ingredient flags detected.</p>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
+            <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Breakdown</p>
+            <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Signal distribution</h2>
+            <div className="mt-6 h-72">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={ingredientBars} barSize={42}>
+                  <CartesianGrid vertical={false} stroke="var(--border)" />
+                  <XAxis dataKey="name" tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <YAxis allowDecimals={false} tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <Tooltip />
+                  <Bar dataKey="value" fill="var(--accent)" radius={[14, 14, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          <TracePanel trace={product.trace} />
+        </div>
+
+        <div className="space-y-8">
+          <div className="rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
+            <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Evidence stats</p>
+            <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Coverage chart</h2>
+            <div className="mt-6 h-72">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={evidenceBars} barSize={42}>
+                  <CartesianGrid vertical={false} stroke="var(--border)" />
+                  <XAxis dataKey="name" tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <YAxis allowDecimals={false} tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <Tooltip />
+                  <Bar dataKey="value" fill="#e9a157" radius={[14, 14, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          <div className="rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
+            <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Pros / cons</p>
+            <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Review summary</h2>
+            <div className="mt-6 grid gap-4">
+              <div className="rounded-[1.5rem] border border-emerald-500/20 bg-emerald-500/10 p-5">
+                <p className="text-xs uppercase tracking-[0.2em] text-emerald-700 dark:text-emerald-300">Pros</p>
+                <ul className="mt-4 space-y-3">
+                  {product.pros.map((pro) => (
+                    <li key={pro} className="rounded-[1.2rem] bg-[color:var(--surface)] px-4 py-3 text-sm text-[color:var(--text-soft)]">
+                      {pro}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div className="rounded-[1.5rem] border border-rose-500/20 bg-rose-500/10 p-5">
+                <p className="text-xs uppercase tracking-[0.2em] text-rose-700 dark:text-rose-300">Cons</p>
+                <ul className="mt-4 space-y-3">
+                  {product.cons.map((con) => (
+                    <li key={con} className="rounded-[1.2rem] bg-[color:var(--surface)] px-4 py-3 text-sm text-[color:var(--text-soft)]">
+                      {con}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
+            <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">References</p>
+            <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Source links</h2>
+            <div className="mt-6 space-y-3">
+              {referenceLinks.map((ref) => (
+                <a
+                  key={ref}
+                  href={ref}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center justify-between gap-4 rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text-soft)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--text-strong)]"
                 >
-                  {tab}
-                </button>
+                  <span className="truncate">{ref}</span>
+                  <ArrowUpRight className="h-4 w-4 shrink-0" />
+                </a>
               ))}
             </div>
-
-            {/* Tab Content */}
-            <motion.div 
-              key={activeTab}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.2 }}
-            >
-              {activeTab === 'scoring' && (
-                <div className="space-y-6">
-                  <div className="bg-white p-6 rounded-xl border border-zinc-200 shadow-sm">
-                    <h3 className="text-lg font-bold text-zinc-900 mb-4">Why it&apos;s a match</h3>
-                    <p className="text-zinc-600 leading-relaxed mb-6">{product.description}</p>
-                    
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div className="bg-white p-5 rounded-xl border border-zinc-200 shadow-sm md:col-span-2">
-                        <div className="flex items-center gap-2 mb-4 text-zinc-900 font-bold">
-                          <Activity className="w-5 h-5 text-orange-600" />
-                          Performance Analysis
-                        </div>
-                        <div className="h-[300px] w-full">
-                          <ResponsiveContainer width="100%" height="100%">
-                            <RadarChart cx="50%" cy="50%" outerRadius="80%" data={chartData}>
-                              <PolarGrid stroke="#e4e4e7" />
-                              <PolarAngleAxis dataKey="subject" tick={{ fill: '#52525b', fontSize: 12 }} />
-                              <PolarRadiusAxis angle={30} domain={[0, 100]} tick={{ fill: '#a1a1aa', fontSize: 10 }} />
-                              <Radar name="Product Score" dataKey="score" stroke="#ea580c" fill="#ea580c" fillOpacity={0.3} />
-                            </RadarChart>
-                          </ResponsiveContainer>
-                        </div>
-                      </div>
-
-                      <div className="bg-emerald-50/50 p-5 rounded-xl border border-emerald-100/50">
-                        <div className="flex items-center gap-2 mb-3 text-emerald-800 font-bold">
-                          <ThumbsUp className="w-5 h-5" />
-                          Top Pros
-                        </div>
-                        <ul className="space-y-2">
-                          {product.reviewSummary.pros.map((pro, i) => (
-                            <li key={i} className="text-sm text-zinc-700 flex items-start gap-2">
-                              <span className="w-1.5 h-1.5 rounded-sm bg-emerald-400 mt-1.5 shrink-0" />
-                              {pro}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                      
-                      <div className="bg-red-50/50 p-5 rounded-xl border border-red-100/50">
-                        <div className="flex items-center gap-2 mb-3 text-red-800 font-bold">
-                          <ThumbsDown className="w-5 h-5" />
-                          Top Cons
-                        </div>
-                        <ul className="space-y-2">
-                          {product.reviewSummary.cons.map((con, i) => (
-                            <li key={i} className="text-sm text-zinc-700 flex items-start gap-2">
-                              <span className="w-1.5 h-1.5 rounded-sm bg-red-400 mt-1.5 shrink-0" />
-                              {con}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-
-                    <div className="mt-8 pt-8 border-t border-zinc-100">
-                      <div className="flex items-center justify-between mb-6">
-                        <h3 className="text-lg font-bold text-zinc-900">Score Breakdown</h3>
-                        <div className="flex items-center gap-1 text-sm text-zinc-500 cursor-help" title="How scoring works">
-                          <Info className="w-4 h-4" />
-                          Methodology
-                        </div>
-                      </div>
-                      
-                      <div className="space-y-5">
-                        {product.scoreBreakdown.map((item, i) => (
-                          <div key={i}>
-                            <div className="flex items-center justify-between mb-2">
-                              <span className="text-sm font-medium text-zinc-700">{item.factor} <span className="text-zinc-400 font-normal ml-1">(Weight: {item.weight})</span></span>
-                              <span className="text-sm font-bold text-zinc-900">{item.score}/100</span>
-                            </div>
-                            <div className="h-2 w-full bg-zinc-100 rounded-lg overflow-hidden">
-                              <div 
-                                className="h-full bg-orange-500 rounded-lg" 
-                                style={{ width: `${item.score}%` }}
-                              />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="mt-8 pt-8 border-t border-zinc-100">
-                      <h3 className="text-lg font-bold text-zinc-900 mb-4">Risk Analysis</h3>
-                      <div className="flex items-start gap-3">
-                        <ShieldCheck className="w-6 h-6 text-emerald-500 shrink-0" />
-                        <div>
-                          <h4 className="font-bold text-zinc-900">Low Risk Profile</h4>
-                          <p className="text-sm text-zinc-600 mt-1">This product passes our authenticity checks. The seller is verified, review patterns appear organic, and the return policy is standard for this category.</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {activeTab === 'reviews' && (
-                <div className="space-y-6">
-                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
-                    <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                    <div>
-                      <h4 className="text-sm font-bold text-amber-800">Paid Promotion Warning</h4>
-                      <p className="text-sm text-amber-700 mt-1">We detected that some TikTok reviews for this product contain paid promotion disclosures. We have weighted these reviews lower in our analysis.</p>
-                    </div>
-                  </div>
-
-                  <div className="bg-white p-6 rounded-xl border border-zinc-200 shadow-sm">
-                    <h3 className="text-lg font-bold text-zinc-900 mb-6">Review Sources</h3>
-                    <div className="space-y-4">
-                      {product.reviewSummary.sources.map((source, i) => (
-                        <div key={i} className="flex items-start gap-4 p-4 rounded-xl border border-zinc-100 bg-zinc-50/50">
-                          <div className="w-10 h-10 rounded-xl bg-white border border-zinc-200 flex items-center justify-center shrink-0">
-                            <MessageSquare className="w-5 h-5 text-zinc-400" />
-                          </div>
-                          <div className="flex-1">
-                            <div className="flex items-center justify-between mb-1">
-                              <h4 className="font-bold text-zinc-900">{source.name}</h4>
-                              <span className="text-xs font-medium text-zinc-500">{source.count} mentions</span>
-                            </div>
-                            <div className="flex items-center gap-2 mb-2">
-                              <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
-                                source.sentiment === 'positive' ? 'bg-emerald-100 text-emerald-700' :
-                                source.sentiment === 'mixed' ? 'bg-amber-100 text-amber-700' :
-                                'bg-red-100 text-red-700'
-                              }`}>
-                                {source.sentiment}
-                              </span>
-                            </div>
-                            {source.note && <p className="text-sm text-zinc-600">{source.note}</p>}
-                            {source.warning && <p className="text-sm text-amber-600 mt-1 flex items-center gap-1"><AlertCircle className="w-3 h-3" /> {source.warning}</p>}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </motion.div>
-
           </div>
         </div>
-      </div>
+      </section>
     </div>
+  );
+}
+
+export default function ProductDetailPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="mx-auto flex min-h-[calc(100vh-10rem)] w-full max-w-7xl items-center justify-center px-4 py-12 md:px-8">
+          <LoaderCircle className="h-8 w-8 animate-spin text-[color:var(--accent)]" />
+        </div>
+      }
+    >
+      <ProductDetailContent />
+    </Suspense>
   );
 }
