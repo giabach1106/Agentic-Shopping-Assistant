@@ -672,6 +672,7 @@ class CoverageAuditorAgent:
     def _build_stats(self, payload: dict[str, Any]) -> dict[str, Any]:
         products = payload.get("products", []) if isinstance(payload.get("products"), list) else []
         reviews = payload.get("reviews", []) if isinstance(payload.get("reviews"), list) else []
+        product_count = len([item for item in products if isinstance(item, dict)])
         review_count = len([item for item in reviews if isinstance(item, dict)])
         rating_count = sum(
             int(item.get("rating_count") or item.get("ratingCount") or 0)
@@ -681,6 +682,7 @@ class CoverageAuditorAgent:
         freshness_seconds = self._freshness_seconds(payload)
         return {
             "sourceCoverage": self._compute_source_coverage(payload),
+            "productCount": product_count,
             "reviewCount": review_count,
             "ratingCount": rating_count,
             "freshnessSeconds": freshness_seconds,
@@ -688,11 +690,20 @@ class CoverageAuditorAgent:
 
     def _evaluate_sufficiency(self, stats: dict[str, Any]) -> dict[str, Any]:
         missing: list[str] = []
-        if int(stats.get("sourceCoverage", 0)) < self._settings.min_source_coverage:
+        source_coverage = int(stats.get("sourceCoverage", 0))
+        product_count = int(stats.get("productCount", 0))
+        review_count = int(stats.get("reviewCount", 0))
+        rating_count = int(stats.get("ratingCount", 0))
+        has_catalog_depth = (
+            product_count >= 10
+            and source_coverage >= max(2, self._settings.min_source_coverage - 1)
+        )
+
+        if source_coverage < self._settings.min_source_coverage:
             missing.append("sourceCoverage")
-        if int(stats.get("reviewCount", 0)) < self._settings.min_review_count:
+        if not has_catalog_depth and review_count < self._settings.min_review_count:
             missing.append("reviewCount")
-        if int(stats.get("ratingCount", 0)) < self._settings.min_rating_count:
+        if not has_catalog_depth and rating_count < self._settings.min_rating_count:
             missing.append("ratingCount")
         if int(stats.get("freshnessSeconds", 999999)) > (self._settings.evidence_freshness_minutes * 60):
             missing.append("freshness")
