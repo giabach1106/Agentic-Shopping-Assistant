@@ -22,6 +22,7 @@ class ChatResponse(BaseModel):
     decision: dict[str, Any] | None = None
     scientific_score: dict[str, Any] = Field(alias="scientificScore")
     evidence_stats: dict[str, Any] = Field(alias="evidenceStats")
+    coverage_audit: dict[str, Any] = Field(alias="coverageAudit")
     trace: list[dict[str, Any]]
     missing_evidence: list[str] = Field(alias="missingEvidence")
     blocking_agents: list[str] = Field(alias="blockingAgents")
@@ -39,6 +40,7 @@ class MessageItem(BaseModel):
     role: str
     content: str
     created_at: str = Field(alias="createdAt")
+    meta: dict[str, Any] | None = None
 
 
 class SessionSnapshotResponse(BaseModel):
@@ -109,6 +111,7 @@ class RecommendationResponse(BaseModel):
     decision: dict[str, Any] | None
     scientific_score: dict[str, Any] = Field(alias="scientificScore")
     evidence_stats: dict[str, Any] = Field(alias="evidenceStats")
+    coverage_audit: dict[str, Any] = Field(alias="coverageAudit")
     trace: list[dict[str, Any]]
     missing_evidence: list[str] = Field(alias="missingEvidence")
     blocking_agents: list[str] = Field(alias="blockingAgents")
@@ -128,6 +131,13 @@ class RuntimeMetricsResponse(BaseModel):
     total_estimated_cost_usd: float = Field(alias="totalEstimatedCostUsd")
     tasks: dict[str, Any]
     sessions_tracked: int = Field(alias="sessionsTracked")
+
+
+class CatalogMetricsResponse(BaseModel):
+    total_records: int = Field(alias="totalRecords")
+    source_counts: dict[str, int] = Field(alias="sourceCounts")
+    latest_retrieved_at: str | None = Field(alias="latestRetrievedAt")
+    freshness_seconds: int = Field(alias="freshnessSeconds")
 
 
 class VoiceConsultRequest(BaseModel):

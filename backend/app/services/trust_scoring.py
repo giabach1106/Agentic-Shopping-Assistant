@@ -49,6 +49,7 @@ class TrustScoreResult:
     decision: DecisionPayload | None
     scientific_score: dict[str, float]
     evidence_stats: dict[str, Any]
+    coverage_audit: dict[str, Any]
     trace: list[dict[str, Any]]
     missing_evidence: list[str]
     blocking_agents: list[str]
@@ -59,6 +60,7 @@ class TrustScoreResult:
             "decision": self.decision.to_public_dict() if self.decision else None,
             "scientificScore": self.scientific_score,
             "evidenceStats": self.evidence_stats,
+            "coverageAudit": self.coverage_audit,
             "trace": self.trace,
             "missingEvidence": self.missing_evidence,
             "blockingAgents": self.blocking_agents,
@@ -79,6 +81,7 @@ class TrustScoringEngine:
         visual = dict(agent_outputs.get("visual") or {})
         price = dict(agent_outputs.get("price") or {})
         collect = dict(agent_outputs.get("collect") or {})
+        coverage_audit_payload = dict(agent_outputs.get("coverage_audit") or {})
 
         missing_evidence = list(collect.get("missingEvidence") or [])
         blocking_agents: list[str] = []
@@ -138,6 +141,28 @@ class TrustScoringEngine:
             "ratingCount": rating_count,
             "missingFields": missing_evidence,
         }
+        collect_sufficiency = dict(collect.get("sufficiency") or {})
+        audit_sufficiency = dict(coverage_audit_payload.get("sufficiency") or {})
+        coverage_audit = {
+            "isSufficient": bool(
+                collect_sufficiency.get(
+                    "isSufficient",
+                    audit_sufficiency.get("isSufficient", False),
+                )
+            ),
+            "missing": list(
+                collect_sufficiency.get("missing")
+                or audit_sufficiency.get("missing")
+                or []
+            ),
+            "sourceCoverage": source_coverage,
+            "reviewCount": review_count,
+            "ratingCount": rating_count,
+            "freshnessSeconds": evidence_stats["freshnessSeconds"],
+            "cacheStatus": collect.get("cacheStatus") or coverage_audit_payload.get("cacheStatus"),
+            "catalogStatus": collect.get("catalogStatus") or coverage_audit_payload.get("catalogStatus"),
+            "crawlPerformed": bool(collect.get("crawlPerformed")),
+        }
         trace = self._build_trace(agent_outputs)
 
         if missing_evidence and self._settings.runtime_mode == "prod":
@@ -146,6 +171,7 @@ class TrustScoringEngine:
                 decision=None,
                 scientific_score=scientific_score,
                 evidence_stats=evidence_stats,
+                coverage_audit=coverage_audit,
                 trace=trace,
                 missing_evidence=missing_evidence,
                 blocking_agents=blocking_agents,
@@ -191,6 +217,7 @@ class TrustScoringEngine:
             decision=decision,
             scientific_score=scientific_score,
             evidence_stats=evidence_stats,
+            coverage_audit=coverage_audit,
             trace=trace,
             missing_evidence=missing_evidence,
             blocking_agents=blocking_agents,
@@ -303,6 +330,21 @@ class TrustScoringEngine:
 
     def _build_trace(self, agent_outputs: dict[str, Any]) -> list[dict[str, Any]]:
         trace: list[dict[str, Any]] = []
+        coverage_audit = dict(agent_outputs.get("coverage_audit") or {})
+        if coverage_audit:
+            sufficiency = dict(coverage_audit.get("sufficiency") or {})
+            trace.append(
+                {
+                    "agent": "coverage_audit",
+                    "step": "catalog_and_cache_audit",
+                    "status": coverage_audit.get("status", "OK"),
+                    "detail": (
+                        f"cache={coverage_audit.get('cacheStatus')}, "
+                        f"catalog={coverage_audit.get('catalogStatus')}, "
+                        f"missing={sufficiency.get('missing', [])}."
+                    ),
+                }
+            )
         collect = dict(agent_outputs.get("collect") or {})
         collection = dict(collect.get("collection") or {})
         collect_trace = collection.get("trace", [])

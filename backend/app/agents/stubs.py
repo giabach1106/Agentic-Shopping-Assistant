@@ -20,6 +20,10 @@ from app.services.visual_analysis import VisualEvidenceAnalyzer
 from app.tools.ui_executor import UIExecutionRequest, UIExecutor
 
 
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
 class PlannerAgent:
     _critical_fields = ("category", "budgetMax", "minRating", "deliveryDeadline")
 
@@ -306,6 +310,268 @@ class PlannerAgent:
         }
 
 
+class CoverageAuditorAgent:
+    def __init__(
+        self,
+        settings: Settings,
+        evidence_store: SQLiteEvidenceStore,
+    ) -> None:
+        self._settings = settings
+        self._evidence_store = evidence_store
+
+    async def run(self, constraints: dict[str, Any]) -> dict[str, Any]:
+        cached = await self._evidence_store.get_cached_collection(constraints)
+        cached_collection = dict(cached.get("collection") or {}) if cached else {}
+        cache_status = "hit" if cached_collection else "miss"
+
+        query_parts = [str(constraints.get("category") or "").strip()]
+        query_parts.extend(
+            str(item).strip() for item in (constraints.get("mustHave") or [])[:3]
+        )
+        query = " ".join(part for part in query_parts if part).strip()
+        catalog_records = await self._evidence_store.list_catalog_records(
+            query=query or None,
+            limit=180,
+        )
+        catalog_collection = self._catalog_records_to_collection(catalog_records)
+        catalog_status = "hit" if catalog_records else "miss"
+
+        collection = self._merge_collections(cached_collection, catalog_collection)
+        stats = self._build_stats(collection)
+        sufficiency = self._evaluate_sufficiency(stats)
+        source_coverage = self._compute_source_coverage(collection)
+        return {
+            "status": "OK" if sufficiency["isSufficient"] else "NEED_DATA",
+            "cacheStatus": cache_status,
+            "catalogStatus": catalog_status,
+            "sufficiency": sufficiency,
+            "sourceCoverage": source_coverage,
+            "reviewCount": int(stats.get("reviewCount", 0)),
+            "ratingCount": int(stats.get("ratingCount", 0)),
+            "freshnessSeconds": int(stats.get("freshnessSeconds", 999999)),
+            "collection": collection,
+        }
+
+    def _catalog_records_to_collection(
+        self,
+        records: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        products: list[dict[str, Any]] = []
+        reviews: list[dict[str, Any]] = []
+        visuals: list[dict[str, Any]] = []
+        trace: list[dict[str, Any]] = [
+            {
+                "source": "catalog",
+                "step": "catalog_lookup",
+                "status": "ok" if records else "warning",
+                "detail": (
+                    f"Loaded {len(records)} records from stored catalog."
+                    if records
+                    else "No matching catalog records found."
+                ),
+                "duration_ms": 0,
+            }
+        ]
+        for item in records:
+            source = str(item.get("source") or "unknown").strip().lower()
+            url = str(item.get("url") or "").strip()
+            title = str(item.get("title") or "").strip()
+            if not url or not title:
+                continue
+            retrieved_at = str(item.get("retrieved_at") or _now_iso())
+            evidence_id = f"catalog::{hash(url)}"
+            products.append(
+                {
+                    "source": source,
+                    "url": url,
+                    "title": title,
+                    "price": float(item.get("price") or 0.0),
+                    "avg_rating": float(item.get("rating") or 0.0),
+                    "rating_count": int(item.get("rating_count") or 0),
+                    "shipping_eta": "unknown",
+                    "return_policy": "unknown",
+                    "seller_info": str(item.get("brand") or source).strip() or source,
+                    "retrieved_at": retrieved_at,
+                    "evidence_id": evidence_id,
+                    "confidence_source": 0.86,
+                    "raw_snapshot_ref": "catalog://record",
+                }
+            )
+            snippets = item.get("review_snippets") or []
+            if isinstance(snippets, list):
+                for index, snippet in enumerate(snippets[:2]):
+                    text = str(snippet).strip()
+                    if not text:
+                        continue
+                    reviews.append(
+                        {
+                            "source": source,
+                            "url": url,
+                            "review_id": f"{evidence_id}::review::{index}",
+                            "rating": float(item.get("rating") or 0.0),
+                            "review_text": text,
+                            "timestamp": retrieved_at,
+                            "helpful_votes": 0,
+                            "verified_purchase": None,
+                            "media_count": 0,
+                            "retrieved_at": retrieved_at,
+                            "evidence_id": f"{evidence_id}::review::{index}",
+                            "confidence_source": 0.79,
+                            "raw_snapshot_ref": "catalog://review",
+                        }
+                    )
+            image_url = str(item.get("image_url") or "").strip()
+            if image_url:
+                visuals.append(
+                    {
+                        "source": source,
+                        "url": url,
+                        "image_url": image_url,
+                        "caption": title[:180],
+                        "retrieved_at": retrieved_at,
+                        "evidence_id": f"{evidence_id}::image",
+                        "confidence_source": 0.74,
+                        "raw_snapshot_ref": "catalog://image",
+                    }
+                )
+        return {
+            "products": products,
+            "reviews": reviews,
+            "visuals": visuals,
+            "trace": trace,
+            "missingEvidence": [],
+            "blockedSources": [],
+        }
+
+    def _merge_collections(
+        self,
+        left: dict[str, Any],
+        right: dict[str, Any],
+    ) -> dict[str, Any]:
+        merged: dict[str, Any] = {}
+        for key in ("products", "reviews", "visuals"):
+            merged[key] = self._merge_entry_list(
+                left.get(key) if isinstance(left.get(key), list) else [],
+                right.get(key) if isinstance(right.get(key), list) else [],
+            )
+
+        merged_trace = []
+        if isinstance(left.get("trace"), list):
+            merged_trace.extend(item for item in left["trace"] if isinstance(item, dict))
+        if isinstance(right.get("trace"), list):
+            merged_trace.extend(item for item in right["trace"] if isinstance(item, dict))
+        merged["trace"] = merged_trace
+        merged["missingEvidence"] = sorted(
+            {
+                str(item)
+                for item in [*(left.get("missingEvidence") or []), *(right.get("missingEvidence") or [])]
+                if str(item).strip()
+            }
+        )
+        merged["blockedSources"] = sorted(
+            {
+                str(item)
+                for item in [*(left.get("blockedSources") or []), *(right.get("blockedSources") or [])]
+                if str(item).strip()
+            }
+        )
+        return merged
+
+    def _merge_entry_list(
+        self,
+        left_entries: list[Any],
+        right_entries: list[Any],
+    ) -> list[dict[str, Any]]:
+        merged: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in [*left_entries, *right_entries]:
+            if not isinstance(item, dict):
+                continue
+            key = str(
+                item.get("evidence_id")
+                or item.get("evidenceId")
+                or item.get("review_id")
+                or item.get("reviewId")
+                or item.get("url")
+                or item.get("image_url")
+                or item.get("imageUrl")
+                or item.get("title")
+                or ""
+            ).strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+        return merged
+
+    def _compute_source_coverage(self, payload: dict[str, Any]) -> int:
+        sources: set[str] = set()
+        for key in ("products", "reviews", "visuals"):
+            entries = payload.get(key)
+            if not isinstance(entries, list):
+                continue
+            for item in entries:
+                if not isinstance(item, dict):
+                    continue
+                source = str(item.get("source") or "").strip().lower()
+                if source:
+                    sources.add(source)
+        return len(sources)
+
+    def _build_stats(self, payload: dict[str, Any]) -> dict[str, Any]:
+        products = payload.get("products", []) if isinstance(payload.get("products"), list) else []
+        reviews = payload.get("reviews", []) if isinstance(payload.get("reviews"), list) else []
+        review_count = len([item for item in reviews if isinstance(item, dict)])
+        rating_count = sum(
+            int(item.get("rating_count") or item.get("ratingCount") or 0)
+            for item in products
+            if isinstance(item, dict)
+        )
+        freshness_seconds = self._freshness_seconds(payload)
+        return {
+            "sourceCoverage": self._compute_source_coverage(payload),
+            "reviewCount": review_count,
+            "ratingCount": rating_count,
+            "freshnessSeconds": freshness_seconds,
+        }
+
+    def _evaluate_sufficiency(self, stats: dict[str, Any]) -> dict[str, Any]:
+        missing: list[str] = []
+        if int(stats.get("sourceCoverage", 0)) < self._settings.min_source_coverage:
+            missing.append("sourceCoverage")
+        if int(stats.get("reviewCount", 0)) < self._settings.min_review_count:
+            missing.append("reviewCount")
+        if int(stats.get("ratingCount", 0)) < self._settings.min_rating_count:
+            missing.append("ratingCount")
+        if int(stats.get("freshnessSeconds", 999999)) > (self._settings.evidence_freshness_minutes * 60):
+            missing.append("freshness")
+        return {"isSufficient": len(missing) == 0, "missing": missing}
+
+    def _freshness_seconds(self, payload: dict[str, Any]) -> int:
+        now = datetime.now(UTC)
+        newest_age = 999999
+        parsed_any = False
+        for key in ("products", "reviews", "visuals"):
+            entries = payload.get(key)
+            if not isinstance(entries, list):
+                continue
+            for item in entries:
+                if not isinstance(item, dict):
+                    continue
+                raw = str(item.get("retrieved_at") or item.get("retrievedAt") or "").strip()
+                if not raw:
+                    continue
+                try:
+                    dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                parsed_any = True
+                newest_age = min(newest_age, int((now - dt).total_seconds()))
+        if not parsed_any:
+            return 999999
+        return max(0, newest_age)
+
+
 class EvidenceCollectionAgent:
     def __init__(
         self,
@@ -317,15 +583,29 @@ class EvidenceCollectionAgent:
         self._collector = collector
         self._evidence_store = evidence_store
 
-    async def run(self, constraints: dict[str, Any]) -> dict[str, Any]:
+    async def run(
+        self,
+        constraints: dict[str, Any],
+        *,
+        seed_collection: dict[str, Any] | None = None,
+        coverage_audit: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         cached = await self._evidence_store.get_cached_collection(constraints)
-        cached_collection = dict(cached.get("collection") or {}) if cached else None
+        cached_collection = dict(cached.get("collection") or {}) if cached else {}
         cached_stats = dict(cached.get("stats") or {}) if cached else {}
 
-        cache_hit = cached_collection is not None
-        collection = dict(cached_collection or {})
-        stats = dict(cached_stats)
-        sufficiency = self._evaluate_sufficiency(stats)
+        collection = self._merge_collections(
+            dict(seed_collection or {}),
+            dict(cached_collection or {}),
+        )
+        stats = self._build_stats(collection) if collection else dict(cached_stats)
+        sufficiency = dict((coverage_audit or {}).get("sufficiency") or {})
+        if not sufficiency:
+            sufficiency = self._evaluate_sufficiency(stats)
+
+        cache_status = str((coverage_audit or {}).get("cacheStatus") or ("hit" if cached_collection else "miss"))
+        catalog_status = str((coverage_audit or {}).get("catalogStatus") or "unknown")
+        crawl_performed = False
 
         if not sufficiency["isSufficient"]:
             result = await self._collector.collect(constraints)
@@ -334,9 +614,8 @@ class EvidenceCollectionAgent:
             stats = self._build_stats(collection)
             sufficiency = self._evaluate_sufficiency(stats)
             await self._evidence_store.upsert_cached_collection(constraints, collection, stats)
-            cache_status = "merged" if cache_hit else "miss"
-        else:
-            cache_status = "hit"
+            cache_status = "merged" if cached_collection else "miss"
+            crawl_performed = True
 
         source_coverage = self._compute_source_coverage(collection)
         missing_evidence = self._normalize_missing_evidence(collection)
@@ -356,7 +635,20 @@ class EvidenceCollectionAgent:
             "blockedSources": collection.get("blockedSources", []),
             "collection": collection,
             "cacheStatus": cache_status,
+            "catalogStatus": catalog_status,
+            "crawlPerformed": crawl_performed,
             "sufficiency": sufficiency,
+            "coverageAudit": {
+                "isSufficient": bool(sufficiency.get("isSufficient")),
+                "missing": [str(item) for item in sufficiency.get("missing", [])],
+                "sourceCoverage": source_coverage,
+                "reviewCount": int(stats.get("reviewCount", 0)),
+                "ratingCount": int(stats.get("ratingCount", 0)),
+                "freshnessSeconds": int(stats.get("freshnessSeconds", 999999)),
+                "cacheStatus": cache_status,
+                "catalogStatus": catalog_status,
+                "crawlPerformed": crawl_performed,
+            },
         }
 
     def _compute_source_coverage(self, payload: dict[str, Any]) -> int:

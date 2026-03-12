@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import json
+import time
 from pathlib import Path
 
 import pytest
@@ -42,4 +45,14 @@ def test_settings(tmp_path: Path) -> Settings:
 def client(test_settings: Settings) -> TestClient:
     app = create_app(test_settings)
     with TestClient(app) as test_client:
+        payload = {
+            "sub": "test-user-sub",
+            "email": "test@example.com",
+            "exp": int(time.time()) + 3600,
+        }
+        encoded = base64.urlsafe_b64encode(
+            json.dumps(payload).encode("utf-8")
+        ).decode("utf-8").rstrip("=")
+        token = f"header.{encoded}.sig"
+        test_client.headers.update({"Authorization": f"Bearer {token}"})
         yield test_client

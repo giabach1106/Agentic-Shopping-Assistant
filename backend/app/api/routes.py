@@ -3,12 +3,14 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import time
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 
 from app.core.container import ServiceContainer
 from app.models.schemas import (
+    CatalogMetricsResponse,
     ChatRequest,
     ChatResponse,
     CreateSessionResponse,
@@ -22,6 +24,7 @@ from app.models.schemas import (
     VoiceConsultRequest,
     VoiceConsultResponse,
 )
+from app.orchestrator.message_formatter import build_assistant_meta
 
 router = APIRouter()
 
@@ -47,6 +50,31 @@ def _decode_token_claims(authorization: str | None) -> dict[str, Any]:
     except (ValueError, json.JSONDecodeError):
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+def _require_token_claims(request: Request) -> dict[str, Any]:
+    services = _services(request)
+    claims = _decode_token_claims(request.headers.get("Authorization"))
+    if not services.settings.require_auth:
+        return claims
+    if not claims:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid bearer token.",
+        )
+    subject = str(claims.get("sub") or "").strip()
+    if not subject:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token is missing required subject claim.",
+        )
+    expires_at = claims.get("exp")
+    if isinstance(expires_at, (int, float)) and int(expires_at) <= int(time.time()):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired.",
+        )
+    return claims
 
 
 def _product_id(source_url: str, evidence_refs: list[str]) -> str:
@@ -132,9 +160,24 @@ async def health(request: Request) -> HealthResponse:
 
 @router.get("/v1/metrics/runtime", response_model=RuntimeMetricsResponse)
 async def runtime_metrics(request: Request) -> RuntimeMetricsResponse:
+    _require_token_claims(request)
     services = _services(request)
     snapshot = services.model_router.snapshot_metrics()
     return RuntimeMetricsResponse(**snapshot)
+
+
+@router.get("/v1/metrics/catalog", response_model=CatalogMetricsResponse)
+async def catalog_metrics(request: Request) -> CatalogMetricsResponse:
+    _require_token_claims(request)
+    services = _services(request)
+    payload = await services.session_service.evidence_store.catalog_metrics()
+    return CatalogMetricsResponse(**payload)
+
+
+@router.options("/v1/sessions", status_code=status.HTTP_204_NO_CONTENT)
+async def options_sessions() -> Response:
+    # Explicit OPTIONS handler keeps browser preflight behavior stable across environments.
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(
@@ -144,7 +187,7 @@ async def runtime_metrics(request: Request) -> RuntimeMetricsResponse:
 )
 async def create_session(request: Request) -> CreateSessionResponse:
     services = _services(request)
-    claims = _decode_token_claims(request.headers.get("Authorization"))
+    claims = _require_token_claims(request)
     created = await services.session_service.create_session(
         user_sub=str(claims.get("sub") or "").strip() or None,
         user_email=str(claims.get("email") or "").strip() or None,
@@ -159,7 +202,7 @@ async def list_sessions(
     cursor: str | None = Query(default=None),
 ) -> SessionListResponse:
     services = _services(request)
-    claims = _decode_token_claims(request.headers.get("Authorization"))
+    claims = _require_token_claims(request)
     result = await services.session_service.list_sessions(
         limit=limit,
         cursor=cursor,
@@ -171,7 +214,7 @@ async def list_sessions(
 @router.post("/v1/chat", response_model=ChatResponse)
 async def chat(request: Request, payload: ChatRequest) -> ChatResponse:
     services = _services(request)
-    claims = _decode_token_claims(request.headers.get("Authorization"))
+    claims = _require_token_claims(request)
     user_sub = str(claims.get("sub") or "").strip() or None
     exists = await services.session_service.require_session(payload.session_id, user_sub)
     if not exists:
@@ -192,7 +235,16 @@ async def chat(request: Request, payload: ChatRequest) -> ChatResponse:
         previous_state=previous_checkpoint,
     )
     await services.session_service.add_assistant_message(
-        payload.session_id, orchestration.reply
+        payload.session_id,
+        orchestration.reply,
+        meta=build_assistant_meta(
+            reply=orchestration.reply,
+            decision=orchestration.decision,
+            scientific_score=orchestration.scientific_score,
+            missing_evidence=orchestration.missing_evidence,
+            blocking_agents=orchestration.blocking_agents,
+            trace=orchestration.trace,
+        ),
     )
     await services.session_service.save_state(payload.session_id, orchestration.state)
 
@@ -203,6 +255,7 @@ async def chat(request: Request, payload: ChatRequest) -> ChatResponse:
         decision=orchestration.decision,
         scientificScore=orchestration.scientific_score,
         evidenceStats=orchestration.evidence_stats,
+        coverageAudit=orchestration.coverage_audit,
         trace=orchestration.trace,
         missingEvidence=orchestration.missing_evidence,
         blockingAgents=orchestration.blocking_agents,
@@ -217,7 +270,7 @@ async def resume_run(
     payload: ResumeRunRequest,
 ) -> ChatResponse:
     services = _services(request)
-    claims = _decode_token_claims(request.headers.get("Authorization"))
+    claims = _require_token_claims(request)
     user_sub = str(claims.get("sub") or "").strip() or None
     exists = await services.session_service.require_session(session_id, user_sub)
     if not exists:
@@ -251,7 +304,18 @@ async def resume_run(
         history=history,
         previous_state=previous_checkpoint,
     )
-    await services.session_service.add_assistant_message(session_id, orchestration.reply)
+    await services.session_service.add_assistant_message(
+        session_id,
+        orchestration.reply,
+        meta=build_assistant_meta(
+            reply=orchestration.reply,
+            decision=orchestration.decision,
+            scientific_score=orchestration.scientific_score,
+            missing_evidence=orchestration.missing_evidence,
+            blocking_agents=orchestration.blocking_agents,
+            trace=orchestration.trace,
+        ),
+    )
     await services.session_service.save_state(session_id, orchestration.state)
 
     return ChatResponse(
@@ -261,6 +325,7 @@ async def resume_run(
         decision=orchestration.decision,
         scientificScore=orchestration.scientific_score,
         evidenceStats=orchestration.evidence_stats,
+        coverageAudit=orchestration.coverage_audit,
         trace=orchestration.trace,
         missingEvidence=orchestration.missing_evidence,
         blockingAgents=orchestration.blocking_agents,
@@ -271,7 +336,7 @@ async def resume_run(
 @router.get("/v1/sessions/{session_id}", response_model=SessionSnapshotResponse)
 async def get_session(request: Request, session_id: str) -> SessionSnapshotResponse:
     services = _services(request)
-    claims = _decode_token_claims(request.headers.get("Authorization"))
+    claims = _require_token_claims(request)
     user_sub = str(claims.get("sub") or "").strip() or None
     exists = await services.session_service.require_session(session_id, user_sub)
     if not exists:
@@ -294,7 +359,7 @@ async def get_session_products(
     session_id: str,
 ) -> SessionProductsEnvelopeResponse:
     services = _services(request)
-    claims = _decode_token_claims(request.headers.get("Authorization"))
+    claims = _require_token_claims(request)
     user_sub = str(claims.get("sub") or "").strip() or None
     exists = await services.session_service.require_session(session_id, user_sub)
     if not exists:
@@ -327,7 +392,7 @@ async def get_recommendation(
     session_id: str,
 ) -> RecommendationResponse:
     services = _services(request)
-    claims = _decode_token_claims(request.headers.get("Authorization"))
+    claims = _require_token_claims(request)
     user_sub = str(claims.get("sub") or "").strip() or None
     exists = await services.session_service.require_session(session_id, user_sub)
     if not exists:
@@ -355,6 +420,7 @@ async def get_recommendation(
         decision=decision.get("decision"),
         scientificScore=decision.get("scientificScore", {}),
         evidenceStats=decision.get("evidenceStats", {}),
+        coverageAudit=decision.get("coverageAudit", {}),
         trace=decision.get("trace", []),
         missingEvidence=decision.get("missingEvidence", []),
         blockingAgents=decision.get("blockingAgents", []),
@@ -367,7 +433,7 @@ async def voice_consult(
     payload: VoiceConsultRequest,
 ) -> VoiceConsultResponse:
     services = _services(request)
-    claims = _decode_token_claims(request.headers.get("Authorization"))
+    claims = _require_token_claims(request)
     user_sub = str(claims.get("sub") or "").strip() or None
     exists = await services.session_service.require_session(payload.session_id, user_sub)
     if not exists:

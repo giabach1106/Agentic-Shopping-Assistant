@@ -50,8 +50,18 @@ class SessionService:
     async def add_user_message(self, session_id: str, content: str) -> None:
         await self._sqlite_store.append_message(session_id, "user", content)
 
-    async def add_assistant_message(self, session_id: str, content: str) -> None:
-        await self._sqlite_store.append_message(session_id, "assistant", content)
+    async def add_assistant_message(
+        self,
+        session_id: str,
+        content: str,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
+        await self._sqlite_store.append_message(
+            session_id,
+            "assistant",
+            content,
+            meta=meta,
+        )
 
     async def get_history(self, session_id: str) -> list[dict[str, Any]]:
         return await self._sqlite_store.get_messages(session_id)
@@ -84,6 +94,7 @@ class SessionService:
                     "role": item["role"],
                     "content": item["content"],
                     "createdAt": item["created_at"],
+                    "meta": item.get("meta"),
                 }
                 for item in messages
             ],

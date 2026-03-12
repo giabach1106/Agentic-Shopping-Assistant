@@ -43,14 +43,15 @@ class Settings:
     estimated_cost_per_call_pro_usd: float
     estimated_cost_per_call_lite_usd: float
     runtime_mode: str = "dev"
-    min_review_count: int = 5
-    min_rating_count: int = 20
-    min_source_coverage: int = 3
+    min_review_count: int = 3
+    min_rating_count: int = 10
+    min_source_coverage: int = 2
     evidence_freshness_minutes: int = 720
     bayesian_prior_mean: float = 4.0
     bayesian_prior_strength: int = 50
     wilson_confidence_z: float = 1.96
     allow_dev_fallback_in_prod: bool = False
+    require_auth: bool = True
     cors_allow_origins: tuple[str, ...] = (
         "http://localhost:3000",
         "http://127.0.0.1:3000",
@@ -103,9 +104,9 @@ class Settings:
                 os.getenv("ESTIMATED_COST_PER_CALL_LITE_USD", "0.004")
             ),
             runtime_mode=os.getenv("RUNTIME_MODE", "dev").strip().lower(),
-            min_review_count=int(os.getenv("MIN_REVIEW_COUNT", "5")),
-            min_rating_count=int(os.getenv("MIN_RATING_COUNT", "20")),
-            min_source_coverage=int(os.getenv("MIN_SOURCE_COVERAGE", "3")),
+            min_review_count=int(os.getenv("MIN_REVIEW_COUNT", "3")),
+            min_rating_count=int(os.getenv("MIN_RATING_COUNT", "10")),
+            min_source_coverage=int(os.getenv("MIN_SOURCE_COVERAGE", "2")),
             evidence_freshness_minutes=int(
                 os.getenv("EVIDENCE_FRESHNESS_MINUTES", "720")
             ),
@@ -115,8 +116,9 @@ class Settings:
             allow_dev_fallback_in_prod=_as_bool(
                 os.getenv("ALLOW_DEV_FALLBACK_IN_PROD"), default=False
             ),
+            require_auth=_as_bool(os.getenv("AGENT_REQUIRE_AUTH"), default=True),
             cors_allow_origins=_as_csv_tuple(
-                os.getenv("AGENT_CORS_ALLOW_ORIGINS"),
+                os.getenv("AGENT_CORS_ALLOW_ORIGINS") or os.getenv("CORS_ORIGINS"),
                 default=("http://localhost:3000", "http://127.0.0.1:3000"),
             ),
         )

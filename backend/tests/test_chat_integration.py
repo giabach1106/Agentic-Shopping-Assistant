@@ -35,10 +35,16 @@ def test_chat_endpoint_persists_session_history(client: TestClient) -> None:
     snapshot_payload = snapshot.json()
     assert snapshot_payload["sessionId"] == session_id
     assert len(snapshot_payload["messages"]) == 4
+    assistant_messages = [
+        item for item in snapshot_payload["messages"] if item["role"] == "assistant"
+    ]
+    assert assistant_messages
+    assert assistant_messages[-1].get("meta") is not None
     assert snapshot_payload["checkpointState"] is not None
     decision = snapshot_payload["checkpointState"]["agent_outputs"]["decision"]
     assert decision["status"] in {"OK", "NEED_DATA"}
     assert "scientificScore" in decision
     assert "evidenceStats" in decision
+    assert "coverageAudit" in decision
     if decision["status"] == "OK":
         assert decision["decision"] is not None

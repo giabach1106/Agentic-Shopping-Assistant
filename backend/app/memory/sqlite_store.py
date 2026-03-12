@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -53,11 +54,13 @@ class SQLiteSessionStore:
                     session_id TEXT NOT NULL,
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
+                    meta_json TEXT,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(session_id) REFERENCES sessions(session_id)
                 )
                 """
             )
+            await self._ensure_message_columns(db)
             await self._ensure_session_columns(db)
             await db.commit()
 
@@ -107,15 +110,27 @@ class SQLiteSessionStore:
             row = await cursor.fetchone()
             return row is not None
 
-    async def append_message(self, session_id: str, role: str, content: str) -> None:
+    async def append_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
         now = _now_iso()
         async with aiosqlite.connect(self._db_path) as db:
             await db.execute(
                 """
-                INSERT INTO messages (session_id, role, content, created_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO messages (session_id, role, content, meta_json, created_at)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (session_id, role, content, now),
+                (
+                    session_id,
+                    role,
+                    content,
+                    json.dumps(meta, sort_keys=True) if meta else None,
+                    now,
+                ),
             )
             await db.execute(
                 "UPDATE sessions SET updated_at = ? WHERE session_id = ?",
@@ -150,7 +165,7 @@ class SQLiteSessionStore:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 """
-                SELECT role, content, created_at
+                SELECT role, content, meta_json, created_at
                 FROM messages
                 WHERE session_id = ?
                 ORDER BY id ASC
@@ -158,7 +173,27 @@ class SQLiteSessionStore:
                 (session_id,),
             )
             rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
+        payload: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            raw_meta = item.get("meta_json")
+            meta: dict[str, Any] | None = None
+            if isinstance(raw_meta, str) and raw_meta.strip():
+                try:
+                    loaded = json.loads(raw_meta)
+                except json.JSONDecodeError:
+                    loaded = None
+                if isinstance(loaded, dict):
+                    meta = loaded
+            payload.append(
+                {
+                    "role": item["role"],
+                    "content": item["content"],
+                    "meta": meta,
+                    "created_at": item["created_at"],
+                }
+            )
+        return payload
 
     async def get_session(self, session_id: str) -> dict[str, str | None] | None:
         async with aiosqlite.connect(self._db_path) as db:
@@ -266,3 +301,10 @@ class SQLiteSessionStore:
         for column, statement in alter_statements.items():
             if column not in existing:
                 await db.execute(statement)
+
+    async def _ensure_message_columns(self, db: aiosqlite.Connection) -> None:
+        cursor = await db.execute("PRAGMA table_info(messages)")
+        rows = await cursor.fetchall()
+        existing = {str(row[1]) for row in rows}
+        if "meta_json" not in existing:
+            await db.execute("ALTER TABLE messages ADD COLUMN meta_json TEXT")

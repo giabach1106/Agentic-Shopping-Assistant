@@ -23,6 +23,7 @@ services:
       AGENT_REDIS_URL: redis://redis:6379/0
       AGENT_SQLITE_PATH: /app/data/agent_memory.sqlite3
       AGENT_CORS_ALLOW_ORIGINS: ${AGENT_CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      AGENT_REQUIRE_AUTH: ${AGENT_REQUIRE_AUTH:-true}
     volumes:
       - ./backend/data:/app/data
     depends_on:

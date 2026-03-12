@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.agents.stubs import (
+    CoverageAuditorAgent,
     DecisionAgent,
     EvidenceCollectionAgent,
     PlannerAgent,
@@ -40,6 +41,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ui_executor = build_ui_executor(resolved_settings, model_router)
     planner = PlannerAgent(model_router)
     evidence_store = SQLiteEvidenceStore(resolved_settings.sqlite_path)
+    coverage_audit = CoverageAuditorAgent(resolved_settings, evidence_store)
     collect = EvidenceCollectionAgent(
         resolved_settings,
         realtime_collector,
@@ -58,6 +60,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     orchestrator = AgentOrchestrator(
         planner=planner,
+        coverage_audit=coverage_audit,
         collect=collect,
         review=review,
         visual=visual,
