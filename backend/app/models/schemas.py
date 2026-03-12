@@ -49,6 +49,60 @@ class SessionSnapshotResponse(BaseModel):
     checkpoint_state: dict[str, Any] | None = Field(alias="checkpointState")
 
 
+class SessionSummaryResponse(BaseModel):
+    session_id: str = Field(alias="sessionId")
+    created_at: str = Field(alias="createdAt")
+    updated_at: str = Field(alias="updatedAt")
+    title: str
+    status: str
+    verdict: str | None = None
+
+
+class SessionListResponse(BaseModel):
+    items: list[SessionSummaryResponse]
+    next_cursor: str | None = Field(alias="nextCursor")
+
+
+class IngredientSignalResponse(BaseModel):
+    ingredient: str
+    note: str
+
+
+class IngredientAnalysisResponse(BaseModel):
+    score: int
+    summary: str
+    protein_source: str = Field(alias="proteinSource")
+    beneficial_signals: list[IngredientSignalResponse] = Field(alias="beneficialSignals")
+    red_flags: list[IngredientSignalResponse] = Field(alias="redFlags")
+    confidence: float
+    references: list[str]
+
+
+class SessionProductResponse(BaseModel):
+    product_id: str = Field(alias="productId")
+    title: str
+    store_name: str = Field(alias="storeName")
+    source: str
+    source_url: str = Field(alias="sourceUrl")
+    price: float
+    rating: float | None = None
+    shipping_eta: str = Field(alias="shippingETA")
+    return_policy: str = Field(alias="returnPolicy")
+    checkout_ready: bool = Field(alias="checkoutReady")
+    evidence_refs: list[str] = Field(alias="evidenceRefs")
+    pros: list[str]
+    cons: list[str]
+    ingredient_analysis: IngredientAnalysisResponse = Field(alias="ingredientAnalysis")
+    scientific_score: dict[str, Any] = Field(alias="scientificScore")
+    evidence_stats: dict[str, Any] = Field(alias="evidenceStats")
+    trace: list[dict[str, Any]]
+
+
+class SessionProductsEnvelopeResponse(BaseModel):
+    session_id: str = Field(alias="sessionId")
+    items: list[SessionProductResponse]
+
+
 class RecommendationResponse(BaseModel):
     session_id: str = Field(alias="sessionId")
     status: str
