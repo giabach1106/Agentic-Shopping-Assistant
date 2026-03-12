@@ -57,3 +57,4 @@ npm run start
 - Missing Cognito env values surface explicit setup errors in the UI shell.
 - The backend enforces bearer token presence and required claims for protected routes.
 - `NEXT_PUBLIC_*` variables must be available when building Docker images because they are inlined into the client bundle.
+- Docker build arg `REQUIRE_COGNITO_ENV=true` can be used in CI to hard-fail when Cognito vars are missing.
