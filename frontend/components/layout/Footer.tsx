@@ -1,14 +1,14 @@
 export function Footer() {
   return (
-    <footer className="border-t border-zinc-200 bg-white py-4 mt-auto">
-      <div className="container mx-auto px-4 max-w-7xl flex flex-col md:flex-row items-center justify-between gap-2 text-xs text-zinc-500">
-        <p>© {new Date().getFullYear()} AgentCart. All rights reserved.</p>
+    <footer className="border-t border-[color:var(--border)] bg-[color:var(--surface)]">
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-3 px-4 py-6 text-sm text-[color:var(--text-muted)] md:flex-row md:items-center md:justify-between md:px-8">
+        <p>AgentCart demo build for Amazon Nova Hackathon.</p>
         <div className="flex items-center gap-4">
-          <span className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-            Systems Operational
+          <span className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-3 py-1">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            Systems operational
           </span>
-          <p className="italic">Note: We may earn a commission on sponsored links.</p>
+          <span>Checkout automation always stops before payment.</span>
         </div>
       </div>
     </footer>

@@ -5,18 +5,17 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
 
   turbopack: {
-    root: '.', 
+    root: path.join(__dirname),
   },
-  
+
   outputFileTracingRoot: path.join(__dirname),
-  
+
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: 'picsum.photos', pathname: '/**' },
       { protocol: 'https', hostname: 'images.unsplash.com', pathname: '/**' },
     ],
   },
-  transpilePackages: ['framer-motion', 'motion'],
 };
 
 export default nextConfig;
