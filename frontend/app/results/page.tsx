@@ -53,6 +53,14 @@ type RenderMessage = SessionMessage & {
   clientId?: string;
 };
 
+const THINKING_STAGES = [
+  "Planner: locking constraints",
+  "Coverage auditor: checking DB and cache",
+  "Collector: filling missing evidence",
+  "Scorer: computing trust and risk",
+  "Decision: preparing final recommendation",
+];
+
 function formatFreshness(seconds: number) {
   if (!seconds) {
     return "fresh";
@@ -176,6 +184,7 @@ function ResultsContent() {
   const [error, setError] = useState<string | null>(null);
   const [chatInput, setChatInput] = useState("");
   const [optimisticMessages, setOptimisticMessages] = useState<RenderMessage[]>([]);
+  const [thinkingStageIndex, setThinkingStageIndex] = useState(0);
   const bootKeyRef = useRef<string | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -186,6 +195,19 @@ function ResultsContent() {
     }
     node.scrollTop = node.scrollHeight;
   }, [snapshot?.messages, optimisticMessages, sending]);
+
+  useEffect(() => {
+    if (!sending) {
+      return;
+    }
+    setThinkingStageIndex(0);
+    const timer = window.setInterval(() => {
+      setThinkingStageIndex((current) => Math.min(current + 1, THINKING_STAGES.length - 1));
+    }, 1200);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [sending]);
 
   useEffect(() => {
     if (!shell.ready) {
@@ -240,8 +262,8 @@ function ResultsContent() {
           const created = await createSession();
           const firstTurn = await runChat(created.sessionId, query);
           const bundle = await loadSessionBundle(created.sessionId, {
-            includeRecommendation: Boolean(firstTurn.decision),
-            includeProducts: Boolean(firstTurn.decision),
+            includeRecommendation: true,
+            includeProducts: true,
           });
           if (cancelled) {
             return;
@@ -379,8 +401,8 @@ function ResultsContent() {
         ? await resumeRun(activeSessionId, outgoing)
         : await runChat(activeSessionId, outgoing);
       const bundle = await loadSessionBundle(activeSessionId, {
-        includeRecommendation: Boolean(turn.decision),
-        includeProducts: Boolean(turn.decision),
+        includeRecommendation: true,
+        includeProducts: true,
       });
       setOptimisticMessages([]);
       setSnapshot(bundle.snapshot);
@@ -778,6 +800,17 @@ function ResultsContent() {
               {messages.length} messages
             </div>
           </div>
+          {sending ? (
+            <div className="mt-4 rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3">
+              <div className="flex items-center gap-2 text-sm text-[color:var(--text-strong)]">
+                <LoaderCircle className="h-4 w-4 animate-spin text-[color:var(--accent)]" />
+                {THINKING_STAGES[thinkingStageIndex]}
+              </div>
+              <p className="mt-2 text-xs leading-6 text-[color:var(--text-muted)]">
+                Structured reasoning updates while the agent run is in progress.
+              </p>
+            </div>
+          ) : null}
           <div ref={chatScrollRef} className="mt-6 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
             {messages.map((message, index) => {
               const isUser = message.role === "user";
