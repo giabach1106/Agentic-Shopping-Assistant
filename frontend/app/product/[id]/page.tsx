@@ -29,9 +29,14 @@ import {
 } from "recharts";
 
 import { TracePanel } from "@/components/trace-panel";
-import { getSessionProducts, getStoredSessionId } from "@/lib/api-client";
-import { isAuthenticated, tryBuildAuthorizeUrl } from "@/lib/auth";
-import type { SessionProduct } from "@/lib/contracts";
+import { useAppShellState } from "@/hooks/use-app-shell-state";
+import { getSession, getSessionProducts, getStoredSessionId } from "@/lib/api-client";
+import type { SessionProduct, SessionSnapshotResponse } from "@/lib/contracts";
+import {
+  buildReferenceLinks,
+  getCollectionInsights,
+  getReviewInsights,
+} from "@/lib/session-analytics";
 
 function scoreTone(score: number) {
   if (score >= 80) {
@@ -47,9 +52,10 @@ function ProductDetailContent() {
   const params = useParams<{ id: string }>();
   const searchParams = useSearchParams();
   const sessionId = searchParams.get("session") || getStoredSessionId();
-  const loginHref = tryBuildAuthorizeUrl();
+  const shell = useAppShellState();
 
   const [product, setProduct] = useState<SessionProduct | null>(null);
+  const [snapshot, setSnapshot] = useState<SessionSnapshotResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,7 +63,11 @@ function ProductDetailContent() {
     let cancelled = false;
 
     async function load() {
-      if (!isAuthenticated()) {
+      if (!shell.ready) {
+        return;
+      }
+
+      if (shell.authConfigured && !shell.hasToken) {
         if (!cancelled) {
           setError("Login with Cognito before opening product detail.");
           setLoading(false);
@@ -74,10 +84,14 @@ function ProductDetailContent() {
       }
 
       try {
-        const response = await getSessionProducts(sessionId);
-        const match = response.items.find((item) => item.productId === params.id) ?? null;
+        const [productsResponse, sessionSnapshot] = await Promise.all([
+          getSessionProducts(sessionId),
+          getSession(sessionId),
+        ]);
+        const match = productsResponse.items.find((item) => item.productId === params.id) ?? null;
         if (!cancelled) {
           setProduct(match);
+          setSnapshot(sessionSnapshot);
           if (!match) {
             setError("Product not found in the selected session.");
           }
@@ -98,7 +112,10 @@ function ProductDetailContent() {
     return () => {
       cancelled = true;
     };
-  }, [params.id, sessionId]);
+  }, [params.id, sessionId, shell.authConfigured, shell.hasToken, shell.ready]);
+
+  const reviewInsights = useMemo(() => getReviewInsights(snapshot), [snapshot]);
+  const collectionInsights = useMemo(() => getCollectionInsights(snapshot), [snapshot]);
 
   const radarData = useMemo(() => {
     if (!product) {
@@ -120,7 +137,7 @@ function ProductDetailContent() {
     return [
       { name: "Beneficial", value: product.ingredientAnalysis.beneficialSignals.length },
       { name: "Red flags", value: product.ingredientAnalysis.redFlags.length },
-      { name: "Refs", value: product.ingredientAnalysis.references.length },
+      { name: "References", value: product.ingredientAnalysis.references.length },
     ];
   }, [product]);
 
@@ -135,12 +152,19 @@ function ProductDetailContent() {
     ];
   }, [product]);
 
-  const referenceLinks = useMemo(() => {
-    if (!product) {
-      return [];
-    }
-    return [...new Set([...product.evidenceRefs, ...product.ingredientAnalysis.references])];
-  }, [product]);
+  const sourceBars = useMemo(
+    () =>
+      reviewInsights.sourceStats.map((item) => ({
+        name: item.source,
+        value: item.count,
+      })),
+    [reviewInsights.sourceStats]
+  );
+
+  const referenceLinks = useMemo(
+    () => (product ? buildReferenceLinks([product], snapshot) : []),
+    [product, snapshot]
+  );
 
   if (loading) {
     return (
@@ -155,11 +179,13 @@ function ProductDetailContent() {
       <div className="mx-auto flex min-h-[calc(100vh-10rem)] w-full max-w-4xl items-center justify-center px-4 py-12 md:px-8">
         <div className="w-full rounded-[2rem] border border-amber-500/20 bg-amber-500/10 p-8 shadow-[var(--shadow-soft)]">
           <p className="text-xs uppercase tracking-[0.28em] text-amber-700 dark:text-amber-300">Detail unavailable</p>
-          <p className="mt-4 text-sm leading-7 text-[color:var(--text-soft)]">{error ?? "No product detail available."}</p>
+          <p className="mt-4 text-sm leading-7 text-[color:var(--text-soft)]">
+            {error ?? "No product detail available."}
+          </p>
           <div className="mt-6 flex flex-wrap gap-3">
-            {loginHref ? (
+            {shell.loginHref && shell.authConfigured && !shell.hasToken ? (
               <a
-                href={loginHref}
+                href={shell.loginHref}
                 className="rounded-full bg-[color:var(--accent)] px-4 py-3 text-sm font-medium text-white transition hover:opacity-90"
               >
                 Login with Cognito
@@ -193,10 +219,10 @@ function ProductDetailContent() {
         </span>
       </div>
 
-      <section className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
-        <div className="rounded-[2.4rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-7 shadow-[var(--shadow-strong)]">
+      <section className="grid gap-6 xl:grid-cols-[1.08fr_0.92fr]">
+        <div className="rounded-[2.5rem] border border-[color:var(--border-strong)] bg-[color:var(--surface)] p-7 shadow-[var(--shadow-strong)]">
           <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">{product.storeName}</p>
-          <h1 className="mt-4 text-4xl font-semibold tracking-[-0.04em] text-[color:var(--text-strong)] md:text-5xl">
+          <h1 className="mt-4 text-4xl font-semibold tracking-[-0.05em] text-[color:var(--text-strong)] md:text-5xl">
             {product.title}
           </h1>
           <p className="mt-4 max-w-3xl text-sm leading-8 text-[color:var(--text-soft)]">
@@ -233,13 +259,17 @@ function ProductDetailContent() {
               href={product.sourceUrl}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-2 rounded-full bg-[color:var(--accent)] px-5 py-3 text-sm font-medium text-white transition hover:opacity-90"
+              className="inline-flex items-center gap-2 rounded-full bg-[color:var(--text-strong)] px-5 py-3 text-sm font-medium text-[color:var(--background)] transition hover:bg-[color:var(--accent)]"
             >
               Open merchant
               <ExternalLink className="h-4 w-4" />
             </a>
             <div className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text-strong)]">
-              {product.checkoutReady ? <ShieldCheck className="h-4 w-4 text-emerald-500" /> : <ShieldAlert className="h-4 w-4 text-amber-500" />}
+              {product.checkoutReady ? (
+                <ShieldCheck className="h-4 w-4 text-emerald-500" />
+              ) : (
+                <ShieldAlert className="h-4 w-4 text-amber-500" />
+              )}
               {product.checkoutReady ? "Checkout-ready handoff" : "Needs extra checkout checks"}
             </div>
             <div className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text-strong)]">
@@ -253,24 +283,46 @@ function ProductDetailContent() {
           <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Scientific scoring</p>
           <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Trust profile radar</h2>
           <div className="mt-6 h-80">
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={280}>
               <RadarChart data={radarData}>
                 <PolarGrid stroke="var(--border)" />
                 <PolarAngleAxis dataKey="metric" tick={{ fill: "currentColor", fontSize: 12 }} />
                 <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
-                <Radar
-                  dataKey="value"
-                  stroke="var(--accent)"
-                  fill="var(--accent)"
-                  fillOpacity={0.22}
-                />
+                <Radar dataKey="value" stroke="var(--accent)" fill="var(--accent)" fillOpacity={0.18} />
               </RadarChart>
             </ResponsiveContainer>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-1">
+            <div className="rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Rating summary</p>
+              <p className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">
+                {reviewInsights.ratingSummary.avgRating.toFixed(1)}
+              </p>
+              <p className="mt-1 text-sm text-[color:var(--text-soft)]">
+                {reviewInsights.ratingSummary.ratingCount} ratings captured
+              </p>
+            </div>
+            <div className="rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Promo likelihood</p>
+              <p className={`mt-2 text-2xl font-semibold ${scoreTone(100 - reviewInsights.paidPromoLikelihood)}`}>
+                {reviewInsights.paidPromoLikelihood}%
+              </p>
+              <p className="mt-1 text-sm text-[color:var(--text-soft)]">Lower is better.</p>
+            </div>
+            <div className="rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Cache posture</p>
+              <p className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">
+                {collectionInsights.cacheStatus}
+              </p>
+              <p className="mt-1 text-sm text-[color:var(--text-soft)]">
+                {collectionInsights.isSufficient ? "Evidence threshold passed." : "Collector filled missing coverage."}
+              </p>
+            </div>
           </div>
         </div>
       </section>
 
-      <section className="grid gap-8 xl:grid-cols-[1.1fr_0.9fr]">
+      <section className="grid gap-8 xl:grid-cols-[1.08fr_0.92fr]">
         <div className="space-y-8">
           <div className="rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
             <div className="mb-5 flex items-center justify-between gap-3">
@@ -318,7 +370,7 @@ function ProductDetailContent() {
             <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Breakdown</p>
             <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Signal distribution</h2>
             <div className="mt-6 h-72">
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={240}>
                 <BarChart data={ingredientBars} barSize={42}>
                   <CartesianGrid vertical={false} stroke="var(--border)" />
                   <XAxis dataKey="name" tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
@@ -338,13 +390,29 @@ function ProductDetailContent() {
             <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Evidence stats</p>
             <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Coverage chart</h2>
             <div className="mt-6 h-72">
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={240}>
                 <BarChart data={evidenceBars} barSize={42}>
                   <CartesianGrid vertical={false} stroke="var(--border)" />
                   <XAxis dataKey="name" tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
                   <YAxis allowDecimals={false} tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
                   <Tooltip />
-                  <Bar dataKey="value" fill="#e9a157" radius={[14, 14, 0, 0]} />
+                  <Bar dataKey="value" fill="#d78c43" radius={[14, 14, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          <div className="rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
+            <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Review coverage</p>
+            <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Source mix</h2>
+            <div className="mt-6 h-72">
+              <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={240}>
+                <BarChart data={sourceBars} barSize={36}>
+                  <CartesianGrid vertical={false} stroke="var(--border)" />
+                  <XAxis dataKey="name" tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <YAxis allowDecimals={false} tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <Tooltip />
+                  <Bar dataKey="value" fill="var(--text-strong)" radius={[14, 14, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -378,6 +446,35 @@ function ProductDetailContent() {
           </div>
 
           <div className="rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
+            <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Evidence ledger</p>
+            <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Source quality table</h2>
+            <div className="mt-6 overflow-hidden rounded-[1.5rem] border border-[color:var(--border)]">
+              <div className="grid grid-cols-[0.22fr_0.2fr_0.2fr_1fr] bg-[color:var(--surface-strong)] px-4 py-3 text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
+                <span>Source</span>
+                <span>Quality</span>
+                <span>Promo</span>
+                <span>Excerpt</span>
+              </div>
+              {reviewInsights.rankedEvidence.slice(0, 5).map((item) => (
+                <div
+                  key={`${item.docId}-${item.source}`}
+                  className="grid grid-cols-[0.22fr_0.2fr_0.2fr_1fr] gap-3 border-t border-[color:var(--border)] px-4 py-4 text-sm"
+                >
+                  <span className="font-medium capitalize text-[color:var(--text-strong)]">{item.source}</span>
+                  <span className={scoreTone(item.qualityScore)}>{item.qualityScore}</span>
+                  <span className="text-[color:var(--text-soft)]">{item.promoSignals.length}</span>
+                  <span className="max-h-12 overflow-hidden text-[color:var(--text-soft)]">{item.excerpt || item.docId}</span>
+                </div>
+              ))}
+              {!reviewInsights.rankedEvidence.length ? (
+                <div className="px-4 py-5 text-sm text-[color:var(--text-soft)]">
+                  Ranked evidence will appear after review analysis is available.
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
             <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">References</p>
             <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Source links</h2>
             <div className="mt-6 space-y-3">
@@ -393,6 +490,11 @@ function ProductDetailContent() {
                   <ArrowUpRight className="h-4 w-4 shrink-0" />
                 </a>
               ))}
+              {!referenceLinks.length ? (
+                <p className="rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text-soft)]">
+                  No external references were captured for this product yet.
+                </p>
+              ) : null}
             </div>
           </div>
         </div>

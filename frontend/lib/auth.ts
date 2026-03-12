@@ -4,6 +4,12 @@ const THEME_KEY = "agentcart.theme";
 export const AUTH_EVENT_NAME = "agentcart:auth";
 export const THEME_EVENT_NAME = "agentcart:theme";
 
+export interface TokenClaims {
+  sub?: string;
+  email?: string;
+  [key: string]: unknown;
+}
+
 function getCognitoConfig() {
   const domain = process.env.NEXT_PUBLIC_COGNITO_DOMAIN;
   const clientId = process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID;
@@ -78,7 +84,7 @@ export function getIdToken() {
 }
 
 export function isAuthenticated() {
-  return Boolean(getIdToken());
+  return canUseCognitoAuth() ? Boolean(getIdToken()) : true;
 }
 
 export function logoutUrl() {
@@ -95,6 +101,31 @@ export function themeStorageKey() {
 
 export function canUseCognitoAuth() {
   return Boolean(getCognitoConfig());
+}
+
+function decodeTokenClaims(token: string): TokenClaims | null {
+  const parts = token.split(".");
+  if (parts.length < 2) {
+    return null;
+  }
+
+  try {
+    const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = payload.padEnd(Math.ceil(payload.length / 4) * 4, "=");
+    const decoded = window.atob(padded);
+    const claims = JSON.parse(decoded) as TokenClaims;
+    return claims && typeof claims === "object" ? claims : null;
+  } catch {
+    return null;
+  }
+}
+
+export function getTokenClaims() {
+  const token = getIdToken();
+  if (!token) {
+    return null;
+  }
+  return decodeTokenClaims(token);
 }
 
 export function tryBuildAuthorizeUrl() {

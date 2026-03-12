@@ -1,35 +1,37 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f7f3ed;
-  --background-elevated: #efe6dc;
-  --surface: rgba(255, 255, 255, 0.78);
-  --surface-muted: rgba(255, 255, 255, 0.58);
-  --surface-strong: #fffdf9;
-  --text-strong: #171411;
-  --text-soft: #4d453c;
-  --text-muted: #776a5e;
-  --border: rgba(23, 20, 17, 0.1);
-  --accent: #f06717;
-  --accent-soft: rgba(240, 103, 23, 0.14);
-  --shadow-soft: 0 20px 60px rgba(57, 34, 16, 0.08);
-  --shadow-strong: 0 28px 80px rgba(57, 34, 16, 0.14);
+  --background: #f2efe8;
+  --background-elevated: #ebe6dc;
+  --surface: rgba(255, 255, 255, 0.74);
+  --surface-muted: rgba(255, 255, 255, 0.52);
+  --surface-strong: #fcfaf6;
+  --text-strong: #171512;
+  --text-soft: #4f473e;
+  --text-muted: #7c7267;
+  --border: rgba(23, 21, 18, 0.1);
+  --border-strong: rgba(23, 21, 18, 0.16);
+  --accent: #d78335;
+  --accent-soft: rgba(215, 131, 53, 0.14);
+  --shadow-soft: 0 18px 54px rgba(32, 23, 14, 0.06);
+  --shadow-strong: 0 30px 86px rgba(32, 23, 14, 0.11);
 }
 
 :root[data-theme="dark"] {
-  --background: #0f1216;
-  --background-elevated: #151b22;
-  --surface: rgba(24, 29, 36, 0.82);
-  --surface-muted: rgba(17, 21, 27, 0.88);
-  --surface-strong: #1c232b;
-  --text-strong: #f7f0e8;
-  --text-soft: #d5c7b9;
-  --text-muted: #988a7e;
-  --border: rgba(247, 240, 232, 0.1);
-  --accent: #ff8a3d;
-  --accent-soft: rgba(255, 138, 61, 0.16);
-  --shadow-soft: 0 20px 60px rgba(0, 0, 0, 0.24);
-  --shadow-strong: 0 28px 90px rgba(0, 0, 0, 0.36);
+  --background: #0e1215;
+  --background-elevated: #151a1f;
+  --surface: rgba(21, 26, 31, 0.8);
+  --surface-muted: rgba(17, 22, 27, 0.9);
+  --surface-strong: #1a2026;
+  --text-strong: #f3eee8;
+  --text-soft: #d2c9be;
+  --text-muted: #978c80;
+  --border: rgba(243, 238, 232, 0.1);
+  --border-strong: rgba(243, 238, 232, 0.16);
+  --accent: #ef9f56;
+  --accent-soft: rgba(239, 159, 86, 0.16);
+  --shadow-soft: 0 20px 60px rgba(0, 0, 0, 0.22);
+  --shadow-strong: 0 28px 90px rgba(0, 0, 0, 0.34);
 }
 
 @theme inline {
@@ -47,6 +49,7 @@ html {
 
 body {
   margin: 0;
+  background: var(--background);
 }
 
 a {

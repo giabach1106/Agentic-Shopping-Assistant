@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { type FormEvent, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
@@ -11,15 +11,29 @@ import {
   ChevronRight,
   ExternalLink,
   LoaderCircle,
-  MessageSquare,
   Send,
   ShieldCheck,
   Sparkles,
   User,
 } from "lucide-react";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  PolarAngleAxis,
+  PolarGrid,
+  PolarRadiusAxis,
+  Radar,
+  RadarChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import { ProductCard } from "@/components/product-card";
 import { TracePanel } from "@/components/trace-panel";
+import { useAppShellState } from "@/hooks/use-app-shell-state";
 import {
   ApiError,
   createSession,
@@ -31,13 +45,8 @@ import {
   runChat,
   storeSessionId,
 } from "@/lib/api-client";
-import { isAuthenticated, tryBuildAuthorizeUrl } from "@/lib/auth";
-import type {
-  ChatResponse,
-  SessionMessage,
-  SessionProduct,
-  SessionSnapshotResponse,
-} from "@/lib/contracts";
+import type { ChatResponse, SessionMessage, SessionProduct, SessionSnapshotResponse } from "@/lib/contracts";
+import { buildReferenceLinks, getCollectionInsights, getReviewInsights } from "@/lib/session-analytics";
 
 function formatPercent(value: number) {
   return `${Math.round(value)}%`;
@@ -56,6 +65,15 @@ function formatFreshness(seconds: number) {
   return `${Math.round(seconds / 86400)}d ago`;
 }
 
+function formatTimestamp(value: string) {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
 function isNotFound(error: unknown) {
   return error instanceof ApiError && error.status === 404;
 }
@@ -70,20 +88,19 @@ function scoreTone(score: number) {
   return "text-rose-600 dark:text-rose-300";
 }
 
-function formatTimestamp(value: string) {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
-async function loadSessionBundle(sessionId: string) {
+async function loadSessionBundle(
+  sessionId: string,
+  options: {
+    includeRecommendation?: boolean;
+    includeProducts?: boolean;
+  } = {}
+) {
+  const includeRecommendation = options.includeRecommendation ?? true;
+  const includeProducts = options.includeProducts ?? true;
   const [snapshotResult, recommendationResult, productsResult] = await Promise.allSettled([
     getSession(sessionId),
-    getRecommendation(sessionId),
-    getSessionProducts(sessionId),
+    includeRecommendation ? getRecommendation(sessionId) : Promise.resolve(null),
+    includeProducts ? getSessionProducts(sessionId) : Promise.resolve({ sessionId, items: [] }),
   ]);
 
   if (snapshotResult.status === "rejected") {
@@ -104,19 +121,50 @@ async function loadSessionBundle(sessionId: string) {
     throw productsResult.reason;
   }
 
-  return {
-    snapshot: snapshotResult.value,
-    recommendation,
-    products,
-  };
+  return { snapshot: snapshotResult.value, recommendation, products };
+}
+
+function Panel({
+  eyebrow,
+  title,
+  children,
+}: {
+  eyebrow: string;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
+      <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">{eyebrow}</p>
+      <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">{title}</h2>
+      <div className="mt-5">{children}</div>
+    </section>
+  );
+}
+
+function MetricCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: React.ReactNode;
+  tone?: string;
+}) {
+  return (
+    <div className="rounded-[1.7rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4">
+      <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">{label}</p>
+      <p className={`mt-3 text-3xl font-semibold ${tone ?? "text-[color:var(--text-strong)]"}`}>{value}</p>
+    </div>
+  );
 }
 
 function ResultsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const shell = useAppShellState();
   const query = searchParams.get("q")?.trim() ?? "";
   const sessionParam = searchParams.get("session");
-  const loginHref = tryBuildAuthorizeUrl();
 
   const [activeSessionId, setActiveSessionId] = useState<string | null>(sessionParam);
   const [snapshot, setSnapshot] = useState<SessionSnapshotResponse | null>(null);
@@ -134,7 +182,11 @@ function ResultsContent() {
   }, [snapshot?.messages, sending]);
 
   useEffect(() => {
-    const bootKey = `${sessionParam ?? ""}|${query}`;
+    if (!shell.ready) {
+      return;
+    }
+
+    const bootKey = `${sessionParam ?? ""}|${query}|${shell.hasToken ? "auth" : "anon"}`;
     if (bootKeyRef.current === bootKey) {
       return;
     }
@@ -143,10 +195,10 @@ function ResultsContent() {
     let cancelled = false;
 
     async function bootstrap() {
-      if (!isAuthenticated()) {
+      if (shell.authConfigured && !shell.hasToken) {
         if (!cancelled) {
-          setLoading(false);
           setError("Login with Cognito before starting or resuming an agent session.");
+          setLoading(false);
         }
         return;
       }
@@ -172,14 +224,11 @@ function ResultsContent() {
 
         if (query) {
           const created = await createSession();
-          if (cancelled) {
-            return;
-          }
           const firstTurn = await runChat(created.sessionId, query);
-          if (cancelled) {
-            return;
-          }
-          const bundle = await loadSessionBundle(created.sessionId);
+          const bundle = await loadSessionBundle(created.sessionId, {
+            includeRecommendation: Boolean(firstTurn.decision),
+            includeProducts: Boolean(firstTurn.decision),
+          });
           if (cancelled) {
             return;
           }
@@ -222,7 +271,7 @@ function ResultsContent() {
     return () => {
       cancelled = true;
     };
-  }, [query, router, sessionParam]);
+  }, [query, router, sessionParam, shell.authConfigured, shell.hasToken, shell.ready]);
 
   const currentPrompt = useMemo(() => {
     const firstUserMessage = snapshot?.messages.find((message) => message.role === "user");
@@ -234,22 +283,19 @@ function ResultsContent() {
     Boolean((snapshot?.checkpointState as { needs_follow_up?: boolean } | null)?.needs_follow_up);
 
   const messages: SessionMessage[] = snapshot?.messages ?? [];
+  const reviewInsights = useMemo(() => getReviewInsights(snapshot), [snapshot]);
+  const collectionInsights = useMemo(() => getCollectionInsights(snapshot), [snapshot]);
+  const referenceLinks = useMemo(() => buildReferenceLinks(products, snapshot), [products, snapshot]);
 
-  const referenceLinks = useMemo(() => {
-    return [...new Set(products.flatMap((product) => [...product.evidenceRefs, ...product.ingredientAnalysis.references]))];
-  }, [products]);
-
-  const sortedProducts = useMemo(() => {
-    return [...products].sort(
-      (left, right) => right.scientificScore.finalTrust - left.scientificScore.finalTrust
-    );
-  }, [products]);
+  const sortedProducts = useMemo(
+    () => [...products].sort((left, right) => right.scientificScore.finalTrust - left.scientificScore.finalTrust),
+    [products]
+  );
 
   const selectedProduct = useMemo(() => {
     if (!recommendation?.decision?.selectedCandidate) {
       return sortedProducts[0] ?? null;
     }
-
     return (
       sortedProducts.find(
         (product) => product.sourceUrl === recommendation.decision?.selectedCandidate?.sourceUrl
@@ -259,25 +305,44 @@ function ResultsContent() {
     );
   }, [recommendation?.decision, sortedProducts]);
 
-  async function submitChatMessage(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  const trustRadarData = useMemo(
+    () => [
+      { metric: "Rating", value: recommendation?.scientificScore.ratingReliability ?? 0 },
+      { metric: "Authenticity", value: recommendation?.scientificScore.spamAuthenticity ?? 0 },
+      { metric: "ABSA", value: recommendation?.scientificScore.absaAlignment ?? 0 },
+      { metric: "Visual", value: recommendation?.scientificScore.visualReliability ?? 0 },
+      { metric: "Final", value: recommendation?.scientificScore.finalTrust ?? 0 },
+    ],
+    [recommendation?.scientificScore]
+  );
 
+  const sourceMixData = useMemo(
+    () => reviewInsights.sourceStats.map((item) => ({ source: item.source, count: item.count })),
+    [reviewInsights.sourceStats]
+  );
+
+  const absaData = useMemo(
+    () => reviewInsights.absaSignals.map((item) => ({ aspect: item.aspect, score: item.score })),
+    [reviewInsights.absaSignals]
+  );
+
+  async function sendChatMessage() {
     if (!activeSessionId || !chatInput.trim()) {
       return;
     }
 
     setSending(true);
     setError(null);
-
     try {
-      if (needsFollowUp) {
-        await resumeRun(activeSessionId, chatInput.trim());
-      } else {
-        await runChat(activeSessionId, chatInput.trim());
-      }
-      const bundle = await loadSessionBundle(activeSessionId);
+      const turn = needsFollowUp
+        ? await resumeRun(activeSessionId, chatInput.trim())
+        : await runChat(activeSessionId, chatInput.trim());
+      const bundle = await loadSessionBundle(activeSessionId, {
+        includeRecommendation: Boolean(turn.decision),
+        includeProducts: Boolean(turn.decision),
+      });
       setSnapshot(bundle.snapshot);
-      setRecommendation(bundle.recommendation);
+      setRecommendation(bundle.recommendation ?? turn);
       setProducts(bundle.products);
       setChatInput("");
     } catch (nextError) {
@@ -316,18 +381,12 @@ function ResultsContent() {
               <h1 className="mt-2 text-3xl font-semibold text-[color:var(--text-strong)]">This session is not ready.</h1>
               <p className="mt-3 text-sm leading-7 text-[color:var(--text-soft)]">{error}</p>
               <div className="mt-6 flex flex-wrap gap-3">
-                {loginHref ? (
-                  <a
-                    href={loginHref}
-                    className="rounded-full bg-[color:var(--accent)] px-5 py-3 text-sm font-medium text-white transition hover:opacity-90"
-                  >
+                {shell.loginHref && shell.authConfigured && !shell.hasToken ? (
+                  <a href={shell.loginHref} className="rounded-full bg-[color:var(--accent)] px-5 py-3 text-sm font-medium text-white transition hover:opacity-90">
                     Login with Cognito
                   </a>
                 ) : null}
-                <Link
-                  href="/"
-                  className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-5 py-3 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
-                >
+                <Link href="/" className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-5 py-3 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]">
                   <ArrowLeft className="h-4 w-4" />
                   Back to search
                 </Link>
@@ -341,84 +400,37 @@ function ResultsContent() {
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-8 md:px-8 md:py-12">
-      <section className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-        <div className="rounded-[2.4rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-7 shadow-[var(--shadow-strong)]">
+      <section className="grid gap-6 xl:grid-cols-[1.18fr_0.82fr]">
+        <div className="rounded-[2.5rem] border border-[color:var(--border-strong)] bg-[color:var(--surface)] p-7 shadow-[var(--shadow-strong)]">
           <div className="flex flex-wrap items-center gap-3">
             <span className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-2 text-xs uppercase tracking-[0.3em] text-[color:var(--text-muted)]">
               <Sparkles className="h-3.5 w-3.5 text-[color:var(--accent)]" />
               Session-bound analysis
             </span>
-            {activeSessionId ? (
-              <span className="rounded-full border border-[color:var(--border)] px-4 py-2 text-xs text-[color:var(--text-muted)]">
-                Session {activeSessionId.slice(0, 10)}
-              </span>
-            ) : null}
+            {activeSessionId ? <span className="rounded-full border border-[color:var(--border)] px-4 py-2 text-xs text-[color:var(--text-muted)]">Session {activeSessionId.slice(0, 10)}</span> : null}
           </div>
-
-          <h1 className="mt-5 max-w-4xl text-4xl font-semibold leading-[1.02] tracking-[-0.04em] text-[color:var(--text-strong)] md:text-5xl">
-            {currentPrompt}
-          </h1>
+          <h1 className="mt-5 max-w-4xl text-4xl font-semibold leading-[1.02] tracking-[-0.05em] text-[color:var(--text-strong)] md:text-5xl">{currentPrompt}</h1>
           <p className="mt-4 max-w-3xl text-base leading-8 text-[color:var(--text-soft)]">
-            The agent compares cached evidence, review authenticity, ingredient signals, and checkout viability before
-            recommending an action.
+            The agent compares cached evidence, review authenticity, ingredient signals, and checkout viability before recommending an action.
           </p>
-
           <div className="mt-8 grid gap-4 md:grid-cols-4">
-            <div className="rounded-[1.7rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Verdict</p>
-              <p className="mt-3 text-3xl font-semibold text-[color:var(--text-strong)]">
-                {recommendation?.decision?.verdict ?? "Pending"}
-              </p>
-            </div>
-            <div className="rounded-[1.7rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Trust score</p>
-              <p className={`mt-3 text-3xl font-semibold ${scoreTone(recommendation?.scientificScore.finalTrust ?? 0)}`}>
-                {recommendation?.scientificScore.finalTrust ?? 0}
-              </p>
-            </div>
-            <div className="rounded-[1.7rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Source coverage</p>
-              <p className="mt-3 text-3xl font-semibold text-[color:var(--text-strong)]">
-                {formatPercent(recommendation?.evidenceStats.sourceCoverage ?? 0)}
-              </p>
-            </div>
-            <div className="rounded-[1.7rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Evidence freshness</p>
-              <p className="mt-3 text-3xl font-semibold text-[color:var(--text-strong)]">
-                {formatFreshness(recommendation?.evidenceStats.freshnessSeconds ?? 0)}
-              </p>
-            </div>
+            <MetricCard label="Verdict" value={recommendation?.decision?.verdict ?? "Pending"} />
+            <MetricCard label="Trust score" value={recommendation?.scientificScore.finalTrust ?? 0} tone={scoreTone(recommendation?.scientificScore.finalTrust ?? 0)} />
+            <MetricCard label="Source coverage" value={formatPercent(recommendation?.evidenceStats.sourceCoverage ?? 0)} />
+            <MetricCard label="Evidence freshness" value={formatFreshness(recommendation?.evidenceStats.freshnessSeconds ?? 0)} />
           </div>
-
-          <div className="mt-8 grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
+          <div className="mt-8 grid gap-4 lg:grid-cols-2">
             <div className="rounded-[1.8rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-5">
               <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Agent response</p>
-              <p className="mt-4 text-sm leading-7 text-[color:var(--text-soft)]">
-                {recommendation?.reply ?? "Waiting for the first decision payload."}
-              </p>
-              {needsFollowUp ? (
-                <div className="mt-4 rounded-[1.3rem] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
-                  The orchestrator needs more detail before finalizing. Reply in the chat panel to continue the same run.
-                </div>
-              ) : null}
+              <p className="mt-4 text-sm leading-7 text-[color:var(--text-soft)]">{recommendation?.reply ?? "Waiting for the first decision payload."}</p>
+              {needsFollowUp ? <div className="mt-4 rounded-[1.3rem] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">The orchestrator needs more detail before finalizing. Reply in the chat panel to continue the same run.</div> : null}
             </div>
-
             <div className="rounded-[1.8rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-5">
               <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Decision factors</p>
               <div className="mt-4 grid gap-3">
                 {(recommendation?.decision?.topReasons ?? []).slice(0, 3).map((reason) => (
-                  <div
-                    key={reason}
-                    className="rounded-[1.2rem] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-[color:var(--text-soft)]"
-                  >
-                    {reason}
-                  </div>
+                  <div key={reason} className="rounded-[1.2rem] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-[color:var(--text-soft)]">{reason}</div>
                 ))}
-                {!recommendation?.decision?.topReasons?.length ? (
-                  <p className="text-sm leading-7 text-[color:var(--text-soft)]">
-                    No decision factors yet. The chat panel can continue the current session.
-                  </p>
-                ) : null}
               </div>
             </div>
           </div>
@@ -430,31 +442,15 @@ function ResultsContent() {
               <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Live session</p>
               <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Follow-up console</h2>
             </div>
-            <div className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--text-muted)]">
-              {messages.length} messages
-            </div>
+            <div className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--text-muted)]">{messages.length} messages</div>
           </div>
-
           <div className="mt-6 flex max-h-[32rem] flex-col gap-3 overflow-y-auto pr-1">
             {messages.map((message, index) => {
               const isUser = message.role === "user";
               return (
-                <div
-                  key={`${message.createdAt}-${index}`}
-                  className={`flex gap-3 ${isUser ? "justify-end" : "justify-start"}`}
-                >
-                  {!isUser ? (
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[color:var(--accent-soft)] text-[color:var(--accent)]">
-                      <Bot className="h-4 w-4" />
-                    </div>
-                  ) : null}
-                  <div
-                    className={`max-w-[84%] rounded-[1.5rem] px-4 py-3 text-sm leading-7 ${
-                      isUser
-                        ? "bg-[color:var(--text-strong)] text-[color:var(--background)]"
-                        : "border border-[color:var(--border)] bg-[color:var(--surface-strong)] text-[color:var(--text-soft)]"
-                    }`}
-                  >
+                <div key={`${message.createdAt}-${index}`} className={`flex gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
+                  {!isUser ? <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[color:var(--accent-soft)] text-[color:var(--accent)]"><Bot className="h-4 w-4" /></div> : null}
+                  <div className={`max-w-[84%] rounded-[1.5rem] px-4 py-3 text-sm leading-7 ${isUser ? "bg-[color:var(--text-strong)] text-[color:var(--background)]" : "border border-[color:var(--border)] bg-[color:var(--surface-strong)] text-[color:var(--text-soft)]"}`}>
                     <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-[0.24em] opacity-70">
                       {isUser ? <User className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
                       {message.role}
@@ -467,242 +463,182 @@ function ResultsContent() {
             })}
             <div ref={messagesEndRef} />
           </div>
-
-          <form onSubmit={submitChatMessage} className="mt-6 space-y-3">
-            <label className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">
-              {needsFollowUp ? "Resume blocked run" : "Refine the brief"}
-            </label>
+          <div className="mt-6 space-y-3">
+            <label className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">{needsFollowUp ? "Resume blocked run" : "Refine the brief"}</label>
             <textarea
               value={chatInput}
               onChange={(event) => setChatInput(event.target.value)}
-              placeholder={
-                needsFollowUp
-                  ? "Example: prioritize grass-fed isolate with no sucralose."
-                  : "Example: keep only whey isolate options that are third-party tested."
-              }
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  void sendChatMessage();
+                }
+              }}
+              placeholder={needsFollowUp ? "Example: prioritize grass-fed isolate with no sucralose." : "Example: keep only whey isolate options that are third-party tested."}
               className="min-h-28 w-full rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm leading-7 text-[color:var(--text-strong)] outline-none transition placeholder:text-[color:var(--text-muted)] focus:border-[color:var(--accent)]"
             />
-            <button
-              type="submit"
-              disabled={!chatInput.trim() || sending || !activeSessionId}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[color:var(--accent)] px-4 py-3 text-sm font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-            >
+            <button type="button" onClick={() => void sendChatMessage()} disabled={!chatInput.trim() || sending || !activeSessionId} className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[color:var(--accent)] px-4 py-3 text-sm font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
               {sending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
               {needsFollowUp ? "Resume agent" : "Send follow-up"}
             </button>
-            {error ? (
-              <div className="rounded-[1.4rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-300">
-                {error}
-              </div>
-            ) : null}
-          </form>
+            {error ? <div className="rounded-[1.4rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-300">{error}</div> : null}
+          </div>
         </aside>
       </section>
 
-      <section className="grid gap-8 xl:grid-cols-[1.15fr_0.85fr]">
+      <section className="grid gap-8 xl:grid-cols-[1.1fr_0.9fr]">
         <div className="space-y-8">
-          <div className="rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
-            <div className="mb-5 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Recommendation</p>
-                <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Best current match</h2>
-              </div>
-              {selectedProduct ? (
-                <Link
-                  href={`/product/${selectedProduct.productId}?session=${activeSessionId}`}
-                  className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-4 py-2 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
-                >
-                  Full analysis
-                  <ChevronRight className="h-4 w-4" />
-                </Link>
-              ) : null}
-            </div>
-
+          <Panel eyebrow="Recommendation" title="Best current match">
             {selectedProduct ? (
               <div className="grid gap-5 lg:grid-cols-[1fr_0.9fr]">
                 <div className="rounded-[1.7rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-5">
-                  <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
-                    {selectedProduct.storeName}
-                  </p>
-                  <h3 className="mt-3 text-3xl font-semibold text-[color:var(--text-strong)]">
-                    {selectedProduct.title}
-                  </h3>
-                  <p className="mt-4 text-sm leading-7 text-[color:var(--text-soft)]">
-                    {selectedProduct.ingredientAnalysis.summary}
-                  </p>
+                  <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">{selectedProduct.storeName}</p>
+                  <h3 className="mt-3 text-3xl font-semibold text-[color:var(--text-strong)]">{selectedProduct.title}</h3>
+                  <p className="mt-4 text-sm leading-7 text-[color:var(--text-soft)]">{selectedProduct.ingredientAnalysis.summary}</p>
                   <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-[color:var(--text-soft)]">
-                    <span className="text-lg font-semibold text-[color:var(--text-strong)]">
-                      ${selectedProduct.price.toFixed(2)}
-                    </span>
+                    <span className="text-lg font-semibold text-[color:var(--text-strong)]">${selectedProduct.price.toFixed(2)}</span>
                     <span>{selectedProduct.shippingETA}</span>
                     <span>{selectedProduct.returnPolicy}</span>
                   </div>
                 </div>
-
                 <div className="grid gap-4">
-                  <div className="rounded-[1.7rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-5">
-                    <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Ingredient score</p>
-                    <p className={`mt-3 text-4xl font-semibold ${scoreTone(selectedProduct.ingredientAnalysis.score)}`}>
-                      {selectedProduct.ingredientAnalysis.score}
-                    </p>
-                    <p className="mt-2 text-sm text-[color:var(--text-soft)]">
-                      Protein source: {selectedProduct.ingredientAnalysis.proteinSource}
-                    </p>
-                  </div>
+                  <MetricCard label="Ingredient score" value={selectedProduct.ingredientAnalysis.score} tone={scoreTone(selectedProduct.ingredientAnalysis.score)} />
                   <div className="rounded-[1.7rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-5">
                     <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Checkout status</p>
                     <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">
                       <ShieldCheck className="h-4 w-4" />
                       {selectedProduct.checkoutReady ? "Ready for checkout handoff" : "Needs extra checkout verification"}
                     </div>
+                    <Link href={`/product/${selectedProduct.productId}?session=${activeSessionId}`} className="mt-4 inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-4 py-2 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]">
+                      Full analysis
+                      <ChevronRight className="h-4 w-4" />
+                    </Link>
                   </div>
                 </div>
               </div>
-            ) : (
-              <p className="text-sm leading-7 text-[color:var(--text-soft)]">
-                No candidate products are available yet for this session.
-              </p>
-            )}
-          </div>
+            ) : <p className="text-sm leading-7 text-[color:var(--text-soft)]">No candidate products are available yet for this session.</p>}
+          </Panel>
 
-          <div className="rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
-            <div className="mb-5 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Shortlist</p>
-                <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Candidate products</h2>
-              </div>
-              <span className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--text-muted)]">
-                {sortedProducts.length} items
-              </span>
-            </div>
-
+          <Panel eyebrow="Shortlist" title={`Candidate products - ${sortedProducts.length}`}>
             <div className="space-y-5">
               {sortedProducts.map((product) => (
                 <ProductCard key={product.productId} product={product} sessionId={activeSessionId ?? ""} />
               ))}
-              {!sortedProducts.length ? (
-                <div className="rounded-[1.7rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-5 py-6 text-sm text-[color:var(--text-soft)]">
-                  No products yet. Continue the session in the chat console to gather enough evidence.
-                </div>
-              ) : null}
             </div>
-          </div>
+          </Panel>
 
           <TracePanel trace={recommendation?.trace ?? []} />
         </div>
 
         <div className="space-y-8">
-          <div className="rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
-            <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Metrics</p>
-            <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Evidence diagnostics</h2>
-            <div className="mt-5 grid gap-3">
-              {[
-                ["Rating reliability", recommendation?.scientificScore.ratingReliability ?? 0],
-                ["Spam authenticity", recommendation?.scientificScore.spamAuthenticity ?? 0],
-                ["ABSA alignment", recommendation?.scientificScore.absaAlignment ?? 0],
-                ["Visual reliability", recommendation?.scientificScore.visualReliability ?? 0],
-              ].map(([label, value]) => (
-                <div
-                  key={label}
-                  className="rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4"
-                >
-                  <div className="mb-2 flex items-center justify-between gap-3 text-sm">
-                    <span className="text-[color:var(--text-soft)]">{label}</span>
-                    <span className={`font-semibold ${scoreTone(Number(value))}`}>{value}</span>
-                  </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-[color:var(--background-elevated)]">
-                    <div
-                      className="h-full rounded-full bg-[color:var(--accent)]"
-                      style={{ width: `${Number(value)}%` }}
-                    />
-                  </div>
+          <Panel eyebrow="Decision matrix" title="Scientific trust radar">
+            <div className="h-80">
+              <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={280}>
+                <RadarChart data={trustRadarData}>
+                  <PolarGrid stroke="var(--border)" />
+                  <PolarAngleAxis dataKey="metric" tick={{ fill: "currentColor", fontSize: 12 }} />
+                  <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
+                  <Radar dataKey="value" stroke="var(--accent)" fill="var(--accent)" fillOpacity={0.18} />
+                </RadarChart>
+              </ResponsiveContainer>
+            </div>
+          </Panel>
+
+          <Panel eyebrow="Evidence posture" title="Collection diagnostics">
+            <div className="grid gap-3 md:grid-cols-2">
+              <MetricCard label="Cache status" value={collectionInsights.cacheStatus} />
+              <MetricCard label="Evidence quality" value={reviewInsights.evidenceQualityScore} tone={scoreTone(reviewInsights.evidenceQualityScore)} />
+              <MetricCard label="Review confidence" value={reviewInsights.confidence} tone={scoreTone(reviewInsights.confidence)} />
+              <MetricCard label="Duplicate clusters" value={reviewInsights.duplicateReviewClusters} />
+            </div>
+            {!collectionInsights.isSufficient || collectionInsights.sufficiencyMissing.length ? <div className="mt-4 rounded-[1.4rem] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">Missing thresholds: {collectionInsights.sufficiencyMissing.join(", ") || "collector filled the gap"}</div> : null}
+          </Panel>
+
+          <Panel eyebrow="Review coverage" title="Source mix">
+            <div className="h-72">
+              <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={240}>
+                <BarChart data={sourceMixData} barSize={38}>
+                  <CartesianGrid vertical={false} stroke="var(--border)" />
+                  <XAxis dataKey="source" tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <YAxis allowDecimals={false} tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <Tooltip />
+                  <Bar dataKey="count" fill="var(--text-strong)" radius={[14, 14, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </Panel>
+
+          <Panel eyebrow="Aspect signals" title="ABSA alignment">
+            <div className="h-72">
+              <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={240}>
+                <BarChart data={absaData} barSize={30} layout="vertical">
+                  <CartesianGrid horizontal={false} stroke="var(--border)" />
+                  <XAxis type="number" domain={[0, 100]} tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <YAxis dataKey="aspect" type="category" tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} width={84} />
+                  <Tooltip />
+                  <Bar dataKey="score" fill="var(--accent)" radius={[0, 14, 14, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </Panel>
+
+          <Panel eyebrow="Evidence ledger" title="Ranked review evidence">
+            <div className="overflow-hidden rounded-[1.5rem] border border-[color:var(--border)]">
+              <div className="grid grid-cols-[0.24fr_0.18fr_0.18fr_1fr] bg-[color:var(--surface-strong)] px-4 py-3 text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
+                <span>Source</span>
+                <span>Quality</span>
+                <span>Promo</span>
+                <span>Excerpt</span>
+              </div>
+              {reviewInsights.rankedEvidence.slice(0, 5).map((item) => (
+                <div key={`${item.docId}-${item.source}`} className="grid grid-cols-[0.24fr_0.18fr_0.18fr_1fr] gap-3 border-t border-[color:var(--border)] px-4 py-4 text-sm">
+                  <span className="font-medium capitalize text-[color:var(--text-strong)]">{item.source}</span>
+                  <span className={scoreTone(item.qualityScore)}>{item.qualityScore}</span>
+                  <span className="text-[color:var(--text-soft)]">{item.promoSignals.length}</span>
+                  <span className="text-[color:var(--text-soft)]">{item.excerpt || item.docId}</span>
                 </div>
               ))}
-            </div>
-
-            <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-1">
-              <div className="rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4">
-                <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Review volume</p>
-                <p className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">
-                  {recommendation?.evidenceStats.reviewCount ?? 0}
-                </p>
-              </div>
-              <div className="rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4">
-                <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Ratings captured</p>
-                <p className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">
-                  {recommendation?.evidenceStats.ratingCount ?? 0}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
-            <div className="mb-5 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Risk log</p>
-                <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Flags and blockers</h2>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              {(recommendation?.decision?.riskFlags ?? []).map((riskFlag) => (
-                <div
-                  key={riskFlag}
-                  className="rounded-[1.4rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-300"
-                >
-                  {riskFlag}
+              {!reviewInsights.rankedEvidence.length ? (
+                <div className="border-t border-[color:var(--border)] px-4 py-4 text-sm text-[color:var(--text-soft)]">
+                  Ranked evidence will appear when the review agent has enough context.
                 </div>
+              ) : null}
+            </div>
+          </Panel>
+
+          <Panel eyebrow="Risk log" title="Flags and blockers">
+            <div className="space-y-3">
+              {[...(recommendation?.decision?.riskFlags ?? []), ...reviewInsights.riskFlags].map((riskFlag) => (
+                <div key={riskFlag} className="rounded-[1.4rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-300">{riskFlag}</div>
               ))}
               {(recommendation?.blockingAgents ?? []).map((agent) => (
-                <div
-                  key={agent}
-                  className="rounded-[1.4rem] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300"
-                >
-                  Blocked by {agent}
-                </div>
+                <div key={agent} className="rounded-[1.4rem] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">Blocked by {agent}</div>
               ))}
-              {!recommendation?.decision?.riskFlags?.length && !recommendation?.blockingAgents?.length ? (
+              {!recommendation?.decision?.riskFlags?.length && !recommendation?.blockingAgents?.length && !reviewInsights.riskFlags.length ? (
                 <div className="rounded-[1.4rem] border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300">
                   No major blockers detected in the current session state.
                 </div>
               ) : null}
             </div>
-          </div>
+          </Panel>
 
-          <div className="rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
-            <div className="mb-5 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">References</p>
-                <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Evidence links</h2>
-              </div>
-              <MessageSquare className="h-5 w-5 text-[color:var(--accent)]" />
-            </div>
-
+          <Panel eyebrow="References" title="Evidence links">
             <div className="space-y-3">
               {referenceLinks.map((ref) => (
-                <a
-                  key={ref}
-                  href={ref}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center justify-between gap-4 rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text-soft)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--text-strong)]"
-                >
+                <a key={ref} href={ref} target="_blank" rel="noreferrer" className="flex items-center justify-between gap-4 rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text-soft)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--text-strong)]">
                   <span className="truncate">{ref}</span>
                   <ExternalLink className="h-4 w-4 shrink-0" />
                 </a>
               ))}
               {!referenceLinks.length ? (
-                <p className="rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text-soft)]">
-                  Reference links will appear when evidence has been collected.
-                </p>
+                <div className="rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text-soft)]">
+                  Reference links will appear after evidence is collected.
+                </div>
               ) : null}
             </div>
-          </div>
+          </Panel>
 
-          <Link
-            href="/history"
-            className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-4 py-3 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
-          >
+          <Link href="/history" className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-4 py-3 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]">
             <CheckCircle2 className="h-4 w-4" />
             Open session history
           </Link>
@@ -714,13 +650,7 @@ function ResultsContent() {
 
 export default function ResultsPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="mx-auto flex min-h-[calc(100vh-10rem)] w-full max-w-7xl items-center justify-center px-4 py-12 md:px-8">
-          <LoaderCircle className="h-8 w-8 animate-spin text-[color:var(--accent)]" />
-        </div>
-      }
-    >
+    <Suspense fallback={<div className="mx-auto flex min-h-[calc(100vh-10rem)] w-full max-w-7xl items-center justify-center px-4 py-12 md:px-8"><LoaderCircle className="h-8 w-8 animate-spin text-[color:var(--accent)]" /></div>}>
       <ResultsContent />
     </Suspense>
   );

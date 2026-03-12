@@ -42,15 +42,33 @@ async function request<T>(
     }
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers,
-    body: init.bodyJson ? JSON.stringify(init.bodyJson) : init.body,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      headers,
+      body: init.bodyJson ? JSON.stringify(init.bodyJson) : init.body,
+    });
+  } catch (error) {
+    throw new Error(
+      `Failed to reach API at ${API_BASE_URL}. Check that the backend is running and CORS allows the frontend origin.`
+    );
+  }
 
   if (!response.ok) {
-    const message = await response.text();
-    throw new ApiError(response.status, message || `Request failed: ${response.status}`);
+    const raw = await response.text();
+    let message = raw || `Request failed: ${response.status}`;
+
+    try {
+      const parsed = JSON.parse(raw) as { detail?: string };
+      if (typeof parsed.detail === "string" && parsed.detail.trim()) {
+        message = parsed.detail;
+      }
+    } catch {
+      // Keep raw response text when the body is not JSON.
+    }
+
+    throw new ApiError(response.status, message);
   }
 
   return (await response.json()) as T;
@@ -61,6 +79,9 @@ export function getStoredSessionId() {
 }
 
 export function storeSessionId(sessionId: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
   localStorage.setItem(SESSION_KEY, sessionId);
   window.dispatchEvent(new Event(SESSION_EVENT_NAME));
 }

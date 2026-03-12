@@ -4,8 +4,8 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ArrowRight, Clock3, History, LoaderCircle, ShieldCheck, Sparkles } from "lucide-react";
 
+import { useAppShellState } from "@/hooks/use-app-shell-state";
 import { listSessions } from "@/lib/api-client";
-import { isAuthenticated, tryBuildAuthorizeUrl } from "@/lib/auth";
 import type { SessionSummary } from "@/lib/contracts";
 
 function formatTimestamp(value: string) {
@@ -32,16 +32,20 @@ function verdictTone(verdict: SessionSummary["verdict"]) {
 }
 
 export default function HistoryPage() {
+  const shell = useAppShellState();
   const [items, setItems] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const loginHref = tryBuildAuthorizeUrl();
 
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
-      if (!isAuthenticated()) {
+      if (!shell.ready) {
+        return;
+      }
+
+      if (shell.authConfigured && !shell.hasToken) {
         if (!cancelled) {
           setError("Login with Cognito to load session history.");
           setLoading(false);
@@ -70,7 +74,7 @@ export default function HistoryPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [shell.authConfigured, shell.hasToken, shell.ready]);
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-8 md:px-8 md:py-12">
@@ -115,9 +119,9 @@ export default function HistoryPage() {
         <div className="rounded-[2rem] border border-amber-500/20 bg-amber-500/10 p-6 shadow-[var(--shadow-soft)]">
           <p className="text-xs uppercase tracking-[0.28em] text-amber-700 dark:text-amber-300">History unavailable</p>
           <p className="mt-3 text-sm leading-7 text-[color:var(--text-soft)]">{error}</p>
-          {loginHref ? (
+          {shell.loginHref ? (
             <a
-              href={loginHref}
+              href={shell.loginHref}
               className="mt-5 inline-flex items-center gap-2 rounded-full bg-[color:var(--accent)] px-4 py-3 text-sm font-medium text-white transition hover:opacity-90"
             >
               Login with Cognito
