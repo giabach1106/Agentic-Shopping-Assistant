@@ -318,10 +318,74 @@ class TrustScoringEngine:
                         "detail": item.get("detail"),
                     }
                 )
-        for name in ("planner", "review", "visual", "price", "decision"):
-            node = agent_outputs.get(name)
-            if not isinstance(node, dict):
-                continue
-            status = node.get("status", "OK")
-            trace.append({"agent": name, "step": "complete", "status": status})
+        planner = dict(agent_outputs.get("planner") or {})
+        if planner:
+            trace.append(
+                {
+                    "agent": "planner",
+                    "step": "constraints",
+                    "status": "NEED_DATA" if planner.get("needsFollowUp") else "OK",
+                    "detail": (
+                        planner.get("followUpQuestion")
+                        or f"Constraints locked for {planner.get('constraints', {}).get('category', 'search')}."
+                    ),
+                }
+            )
+
+        review = dict(agent_outputs.get("review") or {})
+        if review:
+            trace.append(
+                {
+                    "agent": "review",
+                    "step": "review_intelligence",
+                    "status": review.get("status", "OK"),
+                    "detail": (
+                        f"Reviewed {review.get('reviewCount', 0)} records across "
+                        f"{len(review.get('sourceStats', {}))} sources."
+                    ),
+                }
+            )
+
+        visual = dict(agent_outputs.get("visual") or {})
+        if visual:
+            trace.append(
+                {
+                    "agent": "visual",
+                    "step": "visual_verification",
+                    "status": visual.get("status", "OK"),
+                    "detail": (
+                        f"Authenticity {visual.get('authenticityScore', 0)}/100 "
+                        f"with confidence {visual.get('confidence', 0)}."
+                    ),
+                }
+            )
+
+        price = dict(agent_outputs.get("price") or {})
+        if price:
+            trace.append(
+                {
+                    "agent": "price",
+                    "step": "price_logistics",
+                    "status": price.get("status", "OK"),
+                    "detail": (
+                        f"{len(price.get('candidates', []))} candidates ranked; "
+                        f"blockers={price.get('blockers', [])}."
+                    ),
+                }
+            )
+
+        decision = dict(agent_outputs.get("decision") or {})
+        if decision:
+            decision_payload = dict(decision.get("decision") or {})
+            trace.append(
+                {
+                    "agent": "decision",
+                    "step": "final_decision",
+                    "status": decision.get("status", "OK"),
+                    "detail": (
+                        f"Verdict {decision_payload.get('verdict', 'PENDING')} "
+                        f"with trust {decision.get('scientificScore', {}).get('finalTrust', 0)}."
+                    ),
+                }
+            )
         return trace

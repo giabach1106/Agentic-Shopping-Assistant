@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import UTC, datetime
 from statistics import mean
 from typing import Any
 
 from app.collectors.base import RealtimeCollector
 from app.core.config import Settings
 from app.core.model_router import ModelRouter
+from app.memory.evidence_store import SQLiteEvidenceStore
 from app.models.agent_outputs import PriceLogisticsOutput, VisualInsight
 from app.models.planner import SearchConstraints
 from app.rag.base import RetrievalDocument
@@ -305,24 +307,56 @@ class PlannerAgent:
 
 
 class EvidenceCollectionAgent:
-    def __init__(self, settings: Settings, collector: RealtimeCollector) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        collector: RealtimeCollector,
+        evidence_store: SQLiteEvidenceStore,
+    ) -> None:
         self._settings = settings
         self._collector = collector
+        self._evidence_store = evidence_store
 
     async def run(self, constraints: dict[str, Any]) -> dict[str, Any]:
-        result = await self._collector.collect(constraints)
-        payload = result.to_public_dict()
-        source_coverage = self._compute_source_coverage(payload)
-        missing_evidence = self._normalize_missing_evidence(payload)
+        cached = await self._evidence_store.get_cached_collection(constraints)
+        cached_collection = dict(cached.get("collection") or {}) if cached else None
+        cached_stats = dict(cached.get("stats") or {}) if cached else {}
+
+        cache_hit = cached_collection is not None
+        collection = dict(cached_collection or {})
+        stats = dict(cached_stats)
+        sufficiency = self._evaluate_sufficiency(stats)
+
+        if not sufficiency["isSufficient"]:
+            result = await self._collector.collect(constraints)
+            fresh_payload = result.to_public_dict()
+            collection = self._merge_collections(collection, fresh_payload)
+            stats = self._build_stats(collection)
+            sufficiency = self._evaluate_sufficiency(stats)
+            await self._evidence_store.upsert_cached_collection(constraints, collection, stats)
+            cache_status = "merged" if cache_hit else "miss"
+        else:
+            cache_status = "hit"
+
+        source_coverage = self._compute_source_coverage(collection)
+        missing_evidence = self._normalize_missing_evidence(collection)
+        if not sufficiency["isSufficient"]:
+            missing_evidence.extend(str(item) for item in sufficiency["missing"])
+        missing_evidence = sorted(set(item for item in missing_evidence if item))
         status = "OK"
         if self._settings.runtime_mode == "prod" and missing_evidence:
             status = "NEED_DATA"
         return {
             "status": status,
             "sourceCoverage": source_coverage,
+            "reviewCount": int(stats.get("reviewCount", 0)),
+            "ratingCount": int(stats.get("ratingCount", 0)),
+            "freshnessSeconds": int(stats.get("freshnessSeconds", 999999)),
             "missingEvidence": missing_evidence,
-            "blockedSources": payload["blockedSources"],
-            "collection": payload,
+            "blockedSources": collection.get("blockedSources", []),
+            "collection": collection,
+            "cacheStatus": cache_status,
+            "sufficiency": sufficiency,
         }
 
     def _compute_source_coverage(self, payload: dict[str, Any]) -> int:
@@ -351,6 +385,130 @@ class EvidenceCollectionAgent:
         if product_sources:
             missing = [item for item in missing if not str(item).endswith(".product_list")]
         return missing
+
+    def _merge_collections(
+        self,
+        cached: dict[str, Any],
+        fresh: dict[str, Any],
+    ) -> dict[str, Any]:
+        merged: dict[str, Any] = {}
+        for key in ("products", "reviews", "visuals"):
+            cached_entries = cached.get(key) if isinstance(cached.get(key), list) else []
+            fresh_entries = fresh.get(key) if isinstance(fresh.get(key), list) else []
+            merged[key] = self._merge_entry_list(cached_entries, fresh_entries)
+
+        merged_trace = []
+        if isinstance(cached.get("trace"), list):
+            merged_trace.extend(item for item in cached["trace"] if isinstance(item, dict))
+        if isinstance(fresh.get("trace"), list):
+            merged_trace.extend(item for item in fresh["trace"] if isinstance(item, dict))
+        merged_trace.insert(
+            0,
+            {
+                "source": "cache",
+                "step": "cache_lookup",
+                "status": "ok" if cached else "warning",
+                "detail": "Merged stored evidence with collector output." if cached else "No cached evidence found.",
+                "duration_ms": 0,
+            },
+        )
+
+        merged["trace"] = merged_trace
+        merged["missingEvidence"] = sorted(
+            {
+                str(item)
+                for item in [*(cached.get("missingEvidence") or []), *(fresh.get("missingEvidence") or [])]
+                if str(item).strip()
+            }
+        )
+        merged["blockedSources"] = sorted(
+            {
+                str(item)
+                for item in [*(cached.get("blockedSources") or []), *(fresh.get("blockedSources") or [])]
+                if str(item).strip()
+            }
+        )
+        return merged
+
+    def _merge_entry_list(
+        self,
+        cached_entries: list[Any],
+        fresh_entries: list[Any],
+    ) -> list[dict[str, Any]]:
+        merged: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in [*fresh_entries, *cached_entries]:
+            if not isinstance(item, dict):
+                continue
+            key = str(
+                item.get("evidence_id")
+                or item.get("evidenceId")
+                or item.get("review_id")
+                or item.get("reviewId")
+                or item.get("url")
+                or item.get("image_url")
+                or item.get("imageUrl")
+                or item.get("title")
+                or ""
+            ).strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+        return merged
+
+    def _build_stats(self, payload: dict[str, Any]) -> dict[str, Any]:
+        products = payload.get("products", []) if isinstance(payload.get("products"), list) else []
+        reviews = payload.get("reviews", []) if isinstance(payload.get("reviews"), list) else []
+        review_count = len([item for item in reviews if isinstance(item, dict)])
+        rating_count = sum(
+            int(item.get("rating_count") or item.get("ratingCount") or 0)
+            for item in products
+            if isinstance(item, dict)
+        )
+        freshness_seconds = self._freshness_seconds(payload)
+        return {
+            "sourceCoverage": self._compute_source_coverage(payload),
+            "reviewCount": review_count,
+            "ratingCount": rating_count,
+            "freshnessSeconds": freshness_seconds,
+        }
+
+    def _evaluate_sufficiency(self, stats: dict[str, Any]) -> dict[str, Any]:
+        missing: list[str] = []
+        if int(stats.get("sourceCoverage", 0)) < self._settings.min_source_coverage:
+            missing.append("sourceCoverage")
+        if int(stats.get("reviewCount", 0)) < self._settings.min_review_count:
+            missing.append("reviewCount")
+        if int(stats.get("ratingCount", 0)) < self._settings.min_rating_count:
+            missing.append("ratingCount")
+        if int(stats.get("freshnessSeconds", 999999)) > (self._settings.evidence_freshness_minutes * 60):
+            missing.append("freshness")
+        return {"isSufficient": len(missing) == 0, "missing": missing}
+
+    def _freshness_seconds(self, payload: dict[str, Any]) -> int:
+        now = datetime.now(UTC)
+        newest_age = 999999
+        parsed_any = False
+        for key in ("products", "reviews", "visuals"):
+            entries = payload.get(key)
+            if not isinstance(entries, list):
+                continue
+            for item in entries:
+                if not isinstance(item, dict):
+                    continue
+                raw = str(item.get("retrieved_at") or item.get("retrievedAt") or "").strip()
+                if not raw:
+                    continue
+                try:
+                    dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                parsed_any = True
+                newest_age = min(newest_age, int((now - dt).total_seconds()))
+        if not parsed_any:
+            return 999999
+        return max(0, newest_age)
 
 
 class ReviewIntelligenceAgent:

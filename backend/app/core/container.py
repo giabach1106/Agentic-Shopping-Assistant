@@ -8,6 +8,7 @@ from app.core.model_router import ModelRouter
 from app.memory.session_service import SessionService
 from app.orchestrator.graph import AgentOrchestrator
 from app.rag.providers import HybridRAGService
+from app.services.ingredient_analysis import IngredientAnalyzer
 from app.tools.ui_executor import UIExecutor
 
 
@@ -20,3 +21,4 @@ class ServiceContainer:
     ui_executor: UIExecutor
     session_service: SessionService
     orchestrator: AgentOrchestrator
+    ingredient_analyzer: IngredientAnalyzer

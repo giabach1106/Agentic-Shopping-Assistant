@@ -39,6 +39,7 @@ class Settings:
     min_review_count: int = 5
     min_rating_count: int = 20
     min_source_coverage: int = 3
+    evidence_freshness_minutes: int = 720
     bayesian_prior_mean: float = 4.0
     bayesian_prior_strength: int = 50
     wilson_confidence_z: float = 1.96
@@ -94,6 +95,9 @@ class Settings:
             min_review_count=int(os.getenv("MIN_REVIEW_COUNT", "5")),
             min_rating_count=int(os.getenv("MIN_RATING_COUNT", "20")),
             min_source_coverage=int(os.getenv("MIN_SOURCE_COVERAGE", "3")),
+            evidence_freshness_minutes=int(
+                os.getenv("EVIDENCE_FRESHNESS_MINUTES", "720")
+            ),
             bayesian_prior_mean=float(os.getenv("BAYESIAN_PRIOR_MEAN", "4.0")),
             bayesian_prior_strength=int(os.getenv("BAYESIAN_PRIOR_STRENGTH", "50")),
             wilson_confidence_z=float(os.getenv("WILSON_CONFIDENCE_Z", "1.96")),

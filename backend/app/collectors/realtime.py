@@ -45,18 +45,24 @@ class DevRealtimeCollector:
     """Deterministic pseudo-live collector for local development and tests."""
 
     async def collect(self, constraints: dict[str, Any]) -> CollectionResult:
-        del constraints
         now = _now_iso()
         query_id = uuid.uuid4().hex[:8]
+        category = str(constraints.get("category") or "supplement").lower()
+        is_supplement = any(
+            token in category
+            for token in ("whey", "protein", "supplement", "creatine", "preworkout")
+        )
+        if not is_supplement:
+            category = "protein supplement"
         products = [
             ProductCandidateData(
                 source="ebay",
                 url="https://www.ebay.com/itm/266909800001",
-                title="Ergonomic Task Chair Adjustable Lumbar",
-                price=129.0,
-                avg_rating=0.0,
-                rating_count=0,
-                shipping_eta="3-6 days",
+                title="Optimum Nutrition Gold Standard 100% Whey, Double Rich Chocolate, 24g Protein",
+                price=61.99,
+                avg_rating=4.7,
+                rating_count=642,
+                shipping_eta="3-5 days",
                 return_policy="Seller return policy",
                 seller_info="eBay seller",
                 retrieved_at=now,
@@ -67,11 +73,11 @@ class DevRealtimeCollector:
             ProductCandidateData(
                 source="walmart",
                 url="https://www.walmart.com/ip/123456789",
-                title="Ergonomic Mesh Office Chair, Adjustable Arms",
-                price=118.0,
-                avg_rating=4.2,
-                rating_count=210,
-                shipping_eta="2-5 days",
+                title="Dymatize ISO100 Hydrolyzed Whey Isolate, Gourmet Vanilla, 25g Protein",
+                price=74.98,
+                avg_rating=4.6,
+                rating_count=418,
+                shipping_eta="2-4 days",
                 return_policy="30-day return",
                 seller_info="Walmart",
                 retrieved_at=now,
@@ -82,9 +88,9 @@ class DevRealtimeCollector:
             ProductCandidateData(
                 source="amazon",
                 url="https://www.amazon.com/dp/B0CMFQ7Y7Q",
-                title="Ergonomic Mesh Office Chair with Adjustable Lumbar Support",
-                price=139.99,
-                avg_rating=4.4,
+                title="Transparent Labs Grass-Fed Whey Isolate, Milk Chocolate, 28g Protein, Stevia-Sweetened",
+                price=64.99,
+                avg_rating=4.5,
                 rating_count=1287,
                 shipping_eta="2-4 days",
                 return_policy="30-day return",
@@ -97,13 +103,13 @@ class DevRealtimeCollector:
             ProductCandidateData(
                 source="amazon",
                 url="https://www.amazon.com/dp/B0CBV2M2N6",
-                title="Compact Dorm Ergonomic Chair with Flip-Up Arms",
-                price=124.99,
-                avg_rating=4.1,
+                title="Legion Whey+ Isolate, Cinnamon Cereal, Third-Party Tested, Digestive Enzymes",
+                price=59.99,
+                avg_rating=4.4,
                 rating_count=734,
-                shipping_eta="4-6 days",
+                shipping_eta="3-4 days",
                 return_policy="14-day return",
-                seller_info="CampusFurniture Direct",
+                seller_info="Legion Athletics",
                 retrieved_at=now,
                 evidence_id=f"amz-offer-{query_id}-2",
                 confidence_source=0.83,
@@ -117,8 +123,8 @@ class DevRealtimeCollector:
                 review_id=f"amz-rv-{query_id}-1",
                 rating=5.0,
                 review_text=(
-                    "Great back support for long coding sessions. Assembly took around "
-                    "35 minutes but instructions were clear."
+                    "Transparent Labs isolate mixes clean, no bloating, and the stevia-only "
+                    "sweetening tastes less artificial than sucralose-heavy blends."
                 ),
                 timestamp=now,
                 helpful_votes=42,
@@ -131,12 +137,12 @@ class DevRealtimeCollector:
             ),
             ReviewRecord(
                 source="reddit",
-                url="https://www.reddit.com/r/OfficeChairs/comments/xyz123/",
+                url="https://www.reddit.com/r/Supplements/comments/xyz123/",
                 review_id=f"rdt-rv-{query_id}-1",
                 rating=4.0,
                 review_text=(
-                    "Used in a dorm for 8 months. Good comfort, but tighten armrest "
-                    "screws every few weeks."
+                    "ISO100 is easy on digestion because hydrolyzed whey isolate absorbs fast, "
+                    "but some people still dislike the sucralose aftertaste."
                 ),
                 timestamp=now,
                 helpful_votes=29,
@@ -151,10 +157,10 @@ class DevRealtimeCollector:
                 source="tiktok",
                 url="https://www.tiktok.com/@demo/video/7450000000000000001",
                 review_id=f"tt-rv-{query_id}-1",
-                rating=3.5,
+                rating=4.0,
                 review_text=(
-                    "Looks stylish for small room setup; check description for affiliate "
-                    "link disclosure."
+                    "Paid promotion disclosed. Legion Whey+ has third-party tested label and "
+                    "digestive enzymes, but the cinnamon flavor runs sweet for some buyers."
                 ),
                 timestamp=now,
                 helpful_votes=11,
@@ -170,8 +176,8 @@ class DevRealtimeCollector:
             VisualRecord(
                 source="amazon",
                 url="https://www.amazon.com/dp/B0CMFQ7Y7Q",
-                image_url="https://images-na.ssl-images-amazon.com/images/I/demo-chair.jpg",
-                caption="Official listing image with dimensions chart.",
+                image_url="https://images-na.ssl-images-amazon.com/images/I/demo-whey-tub.jpg",
+                caption="Official label image showing whey isolate and nutrition panel.",
                 retrieved_at=now,
                 evidence_id=f"amz-img-{query_id}-1",
                 confidence_source=0.88,
@@ -179,9 +185,9 @@ class DevRealtimeCollector:
             ),
             VisualRecord(
                 source="reddit",
-                url="https://www.reddit.com/r/OfficeChairs/comments/xyz123/",
-                image_url="https://i.redd.it/demochair123.jpg",
-                caption="User-posted room photo showing chair scale in dorm layout.",
+                url="https://www.reddit.com/r/Supplements/comments/xyz123/",
+                image_url="https://i.redd.it/demo-whey123.jpg",
+                caption="User photo comparing scoop size, ingredient label, and texture.",
                 retrieved_at=now,
                 evidence_id=f"rdt-img-{query_id}-1",
                 confidence_source=0.8,
@@ -231,7 +237,7 @@ class DevRealtimeCollector:
                 source="tiktok",
                 step="collect_visuals",
                 status="ok",
-                detail="Collected creator-sourced review/video metadata from development dataset.",
+                detail=f"Collected creator-sourced review/video metadata for {category}.",
                 duration_ms=16,
             ),
         ]
