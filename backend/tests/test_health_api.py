@@ -34,3 +34,17 @@ def test_runtime_metrics_endpoint_returns_usage_snapshot(client: TestClient) -> 
     assert payload["totalCalls"] > 0
     assert payload["sessionsTracked"] >= 1
     assert isinstance(payload["tasks"], dict)
+
+
+def test_cors_preflight_allows_frontend_origin(client: TestClient) -> None:
+    response = client.options(
+        "/v1/sessions",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"

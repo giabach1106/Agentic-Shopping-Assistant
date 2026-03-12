@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.agents.stubs import (
     DecisionAgent,
@@ -90,6 +91,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await session_service.shutdown()
 
     app = FastAPI(title=resolved_settings.app_name, lifespan=lifespan)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(resolved_settings.cors_allow_origins),
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["*"],
+    )
     app.include_router(api_router)
     return app
 

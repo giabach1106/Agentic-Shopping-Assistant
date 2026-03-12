@@ -11,6 +11,13 @@ def _as_bool(value: str | None, default: bool) -> bool:
     return value.lower() in {"1", "true", "yes", "on"}
 
 
+def _as_csv_tuple(value: str | None, default: tuple[str, ...]) -> tuple[str, ...]:
+    if value is None:
+        return default
+    items = tuple(part.strip() for part in value.split(",") if part.strip())
+    return items or default
+
+
 @dataclass(slots=True)
 class Settings:
     app_name: str
@@ -44,6 +51,10 @@ class Settings:
     bayesian_prior_strength: int = 50
     wilson_confidence_z: float = 1.96
     allow_dev_fallback_in_prod: bool = False
+    cors_allow_origins: tuple[str, ...] = (
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    )
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -103,5 +114,9 @@ class Settings:
             wilson_confidence_z=float(os.getenv("WILSON_CONFIDENCE_Z", "1.96")),
             allow_dev_fallback_in_prod=_as_bool(
                 os.getenv("ALLOW_DEV_FALLBACK_IN_PROD"), default=False
+            ),
+            cors_allow_origins=_as_csv_tuple(
+                os.getenv("AGENT_CORS_ALLOW_ORIGINS"),
+                default=("http://localhost:3000", "http://127.0.0.1:3000"),
             ),
         )
