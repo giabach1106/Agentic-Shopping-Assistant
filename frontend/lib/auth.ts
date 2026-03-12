@@ -11,15 +11,32 @@ export interface TokenClaims {
 }
 
 function getCognitoConfig() {
-  const domain = process.env.NEXT_PUBLIC_COGNITO_DOMAIN;
-  const clientId = process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID;
-  const redirectUri = process.env.NEXT_PUBLIC_COGNITO_REDIRECT_URI;
+  const domain = process.env.NEXT_PUBLIC_COGNITO_DOMAIN?.trim();
+  const clientId = process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID?.trim();
+  const redirectUri = process.env.NEXT_PUBLIC_COGNITO_REDIRECT_URI?.trim();
 
   if (!domain || !clientId || !redirectUri) {
     return null;
   }
 
   return { domain, clientId, redirectUri };
+}
+
+export function getAuthConfigurationError() {
+  const missing: string[] = [];
+  if (!process.env.NEXT_PUBLIC_COGNITO_DOMAIN?.trim()) {
+    missing.push("NEXT_PUBLIC_COGNITO_DOMAIN");
+  }
+  if (!process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID?.trim()) {
+    missing.push("NEXT_PUBLIC_COGNITO_CLIENT_ID");
+  }
+  if (!process.env.NEXT_PUBLIC_COGNITO_REDIRECT_URI?.trim()) {
+    missing.push("NEXT_PUBLIC_COGNITO_REDIRECT_URI");
+  }
+  if (!missing.length) {
+    return null;
+  }
+  return `Missing Cognito env: ${missing.join(", ")}`;
 }
 
 export function buildAuthorizeUrl() {
@@ -84,7 +101,7 @@ export function getIdToken() {
 }
 
 export function isAuthenticated() {
-  return canUseCognitoAuth() ? Boolean(getIdToken()) : true;
+  return canUseCognitoAuth() && Boolean(getIdToken());
 }
 
 export function logoutUrl() {
@@ -100,7 +117,7 @@ export function themeStorageKey() {
 }
 
 export function canUseCognitoAuth() {
-  return Boolean(getCognitoConfig());
+  return getAuthConfigurationError() === null;
 }
 
 function decodeTokenClaims(token: string): TokenClaims | null {

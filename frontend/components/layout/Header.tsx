@@ -53,7 +53,7 @@ export function Header() {
                 ? shell.hasToken
                   ? shell.userEmail || "Authenticated"
                   : "Auth required"
-                : "Guest mode"}
+                : "Auth config missing"}
             </div>
           ) : null}
           <ThemeToggle />
@@ -76,7 +76,11 @@ export function Header() {
             >
               Login with Cognito
             </a>
-          ) : null}
+          ) : (
+            <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-700 dark:text-amber-300">
+              Configure Cognito env
+            </span>
+          )}
         </div>
       </div>
     </header>

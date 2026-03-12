@@ -12,6 +12,7 @@ export interface ChatResponse {
   decision: AgentDecision | null;
   scientificScore: ScientificScore;
   evidenceStats: EvidenceStats;
+  coverageAudit: CoverageAudit;
   trace: TraceEvent[];
   missingEvidence: string[];
   blockingAgents: string[];
@@ -55,6 +56,7 @@ export interface SessionMessage {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
+  meta?: Record<string, unknown> | null;
 }
 
 export interface SessionSnapshotResponse {
@@ -128,4 +130,23 @@ export interface SessionProduct {
 export interface SessionProductsResponse {
   sessionId: string;
   items: SessionProduct[];
+}
+
+export interface CoverageAudit {
+  isSufficient: boolean;
+  missing: string[];
+  sourceCoverage: number;
+  reviewCount: number;
+  ratingCount: number;
+  freshnessSeconds: number;
+  cacheStatus?: string;
+  catalogStatus?: string;
+  crawlPerformed?: boolean;
+}
+
+export interface CatalogMetricsResponse {
+  totalRecords: number;
+  sourceCounts: Record<string, number>;
+  latestRetrievedAt: string | null;
+  freshnessSeconds: number;
 }

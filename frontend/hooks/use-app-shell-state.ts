@@ -6,6 +6,7 @@ import { getStoredSessionId, SESSION_EVENT_NAME } from "@/lib/api-client";
 import {
   AUTH_EVENT_NAME,
   canUseCognitoAuth,
+  getAuthConfigurationError,
   getIdToken,
   getTokenClaims,
   tryBuildAuthorizeUrl,
@@ -17,6 +18,7 @@ export interface AppShellState {
   authConfigured: boolean;
   hasToken: boolean;
   isAuthenticated: boolean;
+  authConfigError: string | null;
   activeSessionId: string | null;
   loginHref: string | null;
   logoutHref: string | null;
@@ -31,6 +33,7 @@ function readSnapshot(): AppShellState {
       authConfigured: false,
       hasToken: false,
       isAuthenticated: false,
+      authConfigError: null,
       activeSessionId: null,
       loginHref: null,
       logoutHref: null,
@@ -40,6 +43,7 @@ function readSnapshot(): AppShellState {
   }
 
   const authConfigured = canUseCognitoAuth();
+  const authConfigError = getAuthConfigurationError();
   const token = getIdToken();
   const claims = getTokenClaims();
 
@@ -47,7 +51,8 @@ function readSnapshot(): AppShellState {
     ready: true,
     authConfigured,
     hasToken: Boolean(token),
-    isAuthenticated: authConfigured ? Boolean(token) : true,
+    isAuthenticated: authConfigured && Boolean(token),
+    authConfigError,
     activeSessionId: getStoredSessionId(),
     loginHref: tryBuildAuthorizeUrl(),
     logoutHref: tryLogoutUrl(),
@@ -60,9 +65,10 @@ export function useAppShellState() {
   const [state, setState] = useState<AppShellState>({
     ready: false,
     authConfigured: false,
-    hasToken: false,
-    isAuthenticated: false,
-    activeSessionId: null,
+      hasToken: false,
+      isAuthenticated: false,
+      authConfigError: null,
+      activeSessionId: null,
     loginHref: null,
     logoutHref: null,
     userEmail: null,

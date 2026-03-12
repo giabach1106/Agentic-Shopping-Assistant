@@ -67,7 +67,15 @@ function ProductDetailContent() {
         return;
       }
 
-      if (shell.authConfigured && !shell.hasToken) {
+      if (!shell.authConfigured) {
+        if (!cancelled) {
+          setError(shell.authConfigError || "Cognito configuration is required.");
+          setLoading(false);
+        }
+        return;
+      }
+
+      if (!shell.hasToken) {
         if (!cancelled) {
           setError("Login with Cognito before opening product detail.");
           setLoading(false);
@@ -112,7 +120,7 @@ function ProductDetailContent() {
     return () => {
       cancelled = true;
     };
-  }, [params.id, sessionId, shell.authConfigured, shell.hasToken, shell.ready]);
+  }, [params.id, sessionId, shell.authConfigError, shell.authConfigured, shell.hasToken, shell.ready]);
 
   const reviewInsights = useMemo(() => getReviewInsights(snapshot), [snapshot]);
   const collectionInsights = useMemo(() => getCollectionInsights(snapshot), [snapshot]);

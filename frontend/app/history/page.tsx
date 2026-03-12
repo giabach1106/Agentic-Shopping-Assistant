@@ -45,7 +45,15 @@ export default function HistoryPage() {
         return;
       }
 
-      if (shell.authConfigured && !shell.hasToken) {
+      if (!shell.authConfigured) {
+        if (!cancelled) {
+          setError(shell.authConfigError || "Cognito configuration is required to load history.");
+          setLoading(false);
+        }
+        return;
+      }
+
+      if (!shell.hasToken) {
         if (!cancelled) {
           setError("Login with Cognito to load session history.");
           setLoading(false);
@@ -74,7 +82,7 @@ export default function HistoryPage() {
     return () => {
       cancelled = true;
     };
-  }, [shell.authConfigured, shell.hasToken, shell.ready]);
+  }, [shell.authConfigError, shell.authConfigured, shell.hasToken, shell.ready]);
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-8 md:px-8 md:py-12">

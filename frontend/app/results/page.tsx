@@ -48,9 +48,10 @@ import {
 import type { ChatResponse, SessionMessage, SessionProduct, SessionSnapshotResponse } from "@/lib/contracts";
 import { buildReferenceLinks, getCollectionInsights, getReviewInsights } from "@/lib/session-analytics";
 
-function formatPercent(value: number) {
-  return `${Math.round(value)}%`;
-}
+type RenderMessage = SessionMessage & {
+  optimistic?: boolean;
+  clientId?: string;
+};
 
 function formatFreshness(seconds: number) {
   if (!seconds) {
@@ -174,12 +175,17 @@ function ResultsContent() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chatInput, setChatInput] = useState("");
+  const [optimisticMessages, setOptimisticMessages] = useState<RenderMessage[]>([]);
   const bootKeyRef = useRef<string | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [snapshot?.messages, sending]);
+    const node = chatScrollRef.current;
+    if (!node) {
+      return;
+    }
+    node.scrollTop = node.scrollHeight;
+  }, [snapshot?.messages, optimisticMessages, sending]);
 
   useEffect(() => {
     if (!shell.ready) {
@@ -195,7 +201,15 @@ function ResultsContent() {
     let cancelled = false;
 
     async function bootstrap() {
-      if (shell.authConfigured && !shell.hasToken) {
+      if (!shell.authConfigured) {
+        if (!cancelled) {
+          setError(shell.authConfigError || "Cognito configuration is required.");
+          setLoading(false);
+        }
+        return;
+      }
+
+      if (!shell.hasToken) {
         if (!cancelled) {
           setError("Login with Cognito before starting or resuming an agent session.");
           setLoading(false);
@@ -271,7 +285,7 @@ function ResultsContent() {
     return () => {
       cancelled = true;
     };
-  }, [query, router, sessionParam, shell.authConfigured, shell.hasToken, shell.ready]);
+  }, [query, router, sessionParam, shell.authConfigError, shell.authConfigured, shell.hasToken, shell.ready]);
 
   const currentPrompt = useMemo(() => {
     const firstUserMessage = snapshot?.messages.find((message) => message.role === "user");
@@ -282,7 +296,10 @@ function ResultsContent() {
     recommendation?.status === "NEED_DATA" ||
     Boolean((snapshot?.checkpointState as { needs_follow_up?: boolean } | null)?.needs_follow_up);
 
-  const messages: SessionMessage[] = snapshot?.messages ?? [];
+  const messages: RenderMessage[] = useMemo(
+    () => [...(snapshot?.messages ?? []), ...optimisticMessages],
+    [optimisticMessages, snapshot?.messages]
+  );
   const reviewInsights = useMemo(() => getReviewInsights(snapshot), [snapshot]);
   const collectionInsights = useMemo(() => getCollectionInsights(snapshot), [snapshot]);
   const referenceLinks = useMemo(() => buildReferenceLinks(products, snapshot), [products, snapshot]);
@@ -327,25 +344,38 @@ function ResultsContent() {
   );
 
   async function sendChatMessage() {
-    if (!activeSessionId || !chatInput.trim()) {
+    const outgoing = chatInput.trim();
+    if (!activeSessionId || !outgoing) {
       return;
     }
 
+    const optimistic: RenderMessage = {
+      role: "user",
+      content: outgoing,
+      createdAt: new Date().toISOString(),
+      optimistic: true,
+      clientId: `local-${Date.now()}`,
+    };
+
+    setOptimisticMessages((current) => [...current, optimistic]);
+    setChatInput("");
     setSending(true);
     setError(null);
     try {
       const turn = needsFollowUp
-        ? await resumeRun(activeSessionId, chatInput.trim())
-        : await runChat(activeSessionId, chatInput.trim());
+        ? await resumeRun(activeSessionId, outgoing)
+        : await runChat(activeSessionId, outgoing);
       const bundle = await loadSessionBundle(activeSessionId, {
         includeRecommendation: Boolean(turn.decision),
         includeProducts: Boolean(turn.decision),
       });
+      setOptimisticMessages([]);
       setSnapshot(bundle.snapshot);
       setRecommendation(bundle.recommendation ?? turn);
       setProducts(bundle.products);
-      setChatInput("");
     } catch (nextError) {
+      setOptimisticMessages((current) => current.filter((item) => item.clientId !== optimistic.clientId));
+      setChatInput(outgoing);
       setError(nextError instanceof Error ? nextError.message : "Chat update failed.");
     } finally {
       setSending(false);
@@ -416,7 +446,7 @@ function ResultsContent() {
           <div className="mt-8 grid gap-4 md:grid-cols-4">
             <MetricCard label="Verdict" value={recommendation?.decision?.verdict ?? "Pending"} />
             <MetricCard label="Trust score" value={recommendation?.scientificScore.finalTrust ?? 0} tone={scoreTone(recommendation?.scientificScore.finalTrust ?? 0)} />
-            <MetricCard label="Source coverage" value={formatPercent(recommendation?.evidenceStats.sourceCoverage ?? 0)} />
+            <MetricCard label="Source coverage" value={`${recommendation?.evidenceStats.sourceCoverage ?? 0} sources`} />
             <MetricCard label="Evidence freshness" value={formatFreshness(recommendation?.evidenceStats.freshnessSeconds ?? 0)} />
           </div>
           <div className="mt-8 grid gap-4 lg:grid-cols-2">
@@ -444,24 +474,49 @@ function ResultsContent() {
             </div>
             <div className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--text-muted)]">{messages.length} messages</div>
           </div>
-          <div className="mt-6 flex max-h-[32rem] flex-col gap-3 overflow-y-auto pr-1">
+          <div ref={chatScrollRef} className="mt-6 flex max-h-[32rem] flex-col gap-3 overflow-y-auto pr-1">
             {messages.map((message, index) => {
               const isUser = message.role === "user";
+              const meta = !isUser && message.meta && typeof message.meta === "object"
+                ? (message.meta as Record<string, unknown>)
+                : null;
+              const topReasons = Array.isArray(meta?.topReasons)
+                ? meta?.topReasons.map((item) => String(item))
+                : [];
+              const missingEvidence = Array.isArray(meta?.missingEvidence)
+                ? meta?.missingEvidence.map((item) => String(item))
+                : [];
               return (
-                <div key={`${message.createdAt}-${index}`} className={`flex gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
+                <div key={`${message.createdAt}-${message.clientId ?? index}`} className={`flex gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
                   {!isUser ? <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[color:var(--accent-soft)] text-[color:var(--accent)]"><Bot className="h-4 w-4" /></div> : null}
                   <div className={`max-w-[84%] rounded-[1.5rem] px-4 py-3 text-sm leading-7 ${isUser ? "bg-[color:var(--text-strong)] text-[color:var(--background)]" : "border border-[color:var(--border)] bg-[color:var(--surface-strong)] text-[color:var(--text-soft)]"}`}>
                     <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-[0.24em] opacity-70">
                       {isUser ? <User className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
                       {message.role}
                       <span>{formatTimestamp(message.createdAt)}</span>
+                      {message.optimistic ? <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[10px]">sending</span> : null}
                     </div>
-                    {message.content}
+                    <p>{meta?.summary ? String(meta.summary) : message.content}</p>
+                    {!isUser && meta ? (
+                      <details className="mt-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
+                        <summary className="cursor-pointer text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                          Reasoning details
+                        </summary>
+                        <div className="mt-2 space-y-2 text-xs leading-6">
+                          {typeof meta.verdict === "string" || typeof meta.trust === "number" ? (
+                            <p>
+                              Verdict: {String(meta.verdict || "pending")} | Trust: {typeof meta.trust === "number" ? meta.trust.toFixed(2) : "n/a"}
+                            </p>
+                          ) : null}
+                          {topReasons.length ? <p>Factors: {topReasons.join(" | ")}</p> : null}
+                          {missingEvidence.length ? <p>Missing: {missingEvidence.join(", ")}</p> : null}
+                        </div>
+                      </details>
+                    ) : null}
                   </div>
                 </div>
               );
             })}
-            <div ref={messagesEndRef} />
           </div>
           <div className="mt-6 space-y-3">
             <label className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">{needsFollowUp ? "Resume blocked run" : "Refine the brief"}</label>
@@ -547,9 +602,11 @@ function ResultsContent() {
           <Panel eyebrow="Evidence posture" title="Collection diagnostics">
             <div className="grid gap-3 md:grid-cols-2">
               <MetricCard label="Cache status" value={collectionInsights.cacheStatus} />
+              <MetricCard label="Catalog status" value={recommendation?.coverageAudit?.catalogStatus ?? "unknown"} />
               <MetricCard label="Evidence quality" value={reviewInsights.evidenceQualityScore} tone={scoreTone(reviewInsights.evidenceQualityScore)} />
               <MetricCard label="Review confidence" value={reviewInsights.confidence} tone={scoreTone(reviewInsights.confidence)} />
               <MetricCard label="Duplicate clusters" value={reviewInsights.duplicateReviewClusters} />
+              <MetricCard label="Crawler" value={recommendation?.coverageAudit?.crawlPerformed ? "expanded" : "skipped"} />
             </div>
             {!collectionInsights.isSufficient || collectionInsights.sufficiencyMissing.length ? <div className="mt-4 rounded-[1.4rem] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">Missing thresholds: {collectionInsights.sufficiencyMissing.join(", ") || "collector filled the gap"}</div> : null}
           </Panel>

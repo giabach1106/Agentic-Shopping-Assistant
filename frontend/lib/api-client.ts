@@ -1,4 +1,5 @@
 import type {
+  CatalogMetricsResponse,
   ChatResponse,
   CreateSessionResponse,
   SessionListResponse,
@@ -124,4 +125,8 @@ export async function resumeRun(sessionId: string, message: string) {
     method: "POST",
     bodyJson: { message },
   });
+}
+
+export async function getCatalogMetrics() {
+  return request<CatalogMetricsResponse>("/v1/metrics/catalog");
 }
