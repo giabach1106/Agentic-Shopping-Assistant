@@ -9,6 +9,7 @@
 - [ ] `/product/[id]` renders ingredient analysis, charts, and source references
 - [ ] Dark mode and light mode both render correctly on desktop and mobile
 - [ ] Browser preflight to `POST /v1/sessions` succeeds from the frontend origin
+- [ ] No guest-mode path is shown in the main flow
 
 ## Backend checks
 
@@ -19,6 +20,7 @@
 - [ ] `GET /v1/sessions/{session_id}` works
 - [ ] `GET /v1/sessions/{session_id}/products` works
 - [ ] `GET /v1/recommendations/{session_id}` returns decision payload
+- [ ] `GET /v1/metrics/catalog` returns source counts and freshness
 - [ ] `pytest -q` passes
 
 ## Explainability checks
@@ -28,6 +30,7 @@
 - [ ] Ingredient red flags and beneficial signals are visible
 - [ ] Source links are clickable from the UI
 - [ ] The demo explains DB-first evidence reuse before fresh crawling
+- [ ] Chat messages show expandable structured reasoning block (no raw CoT)
 
 ## Safety checks
 
@@ -39,5 +42,6 @@
 
 - [ ] README matches the current architecture
 - [ ] Docker compose starts frontend, backend, and Redis
+- [ ] Warmup script seeds target supplements records before demo
 - [ ] Demo script uses the whey / supplements lane
 - [ ] Judge walkthrough includes one normal path and one cautious fallback path

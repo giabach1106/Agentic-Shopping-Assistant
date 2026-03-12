@@ -30,14 +30,24 @@ npm run dev
 
 - Backend health: `http://localhost:8000/health`
 - Frontend: `http://localhost:3000`
+- Catalog metrics: `http://localhost:8000/v1/metrics/catalog` (requires auth token)
 
-## 3. Recommended demo prompt
+## 3. Warm up DB-first catalog before demo (recommended)
+
+```bash
+cd backend
+python scripts/warmup_supplements_catalog.py --target 100
+```
+
+This seeds supplements catalog data used by the coverage auditor before fresh crawl.
+
+## 4. Recommended demo prompt
 
 ```text
 Find a whey isolate under $90 with third-party testing, low lactose, and no sucralose.
 ```
 
-## 4. Live demo flow
+## 5. Live demo flow
 
 1. Login with Cognito on the landing page.
 2. Submit the whey prompt.
@@ -59,23 +69,23 @@ Find a whey isolate under $90 with third-party testing, low lactose, and no sucr
    - source links and trace timeline
 6. Return to `/history` and reopen the same session to prove persistence.
 
-## 5. Talking points for judges
+## 6. Talking points for judges
 
 - The system is session-first: history, chat, decision, and product detail stay tied to one `sessionId`.
 - The backend now uses a DB-first evidence gate and only crawls when cache coverage is insufficient.
 - The supplements lane is stronger than generic shopping because it explains ingredient quality, not just price and stars.
 - The UI does not expose raw chain-of-thought. It shows structured reasoning, blockers, metrics, and evidence links.
 - Checkout automation is intentionally constrained to a stop-before-payment handoff.
-- The frontend is resilient to both Cognito mode and guest-mode local runs; browser CORS is now part of the documented setup.
+- Auth is strict in the main flow: login is required before session/chat/history APIs.
 
-## 6. Backup script if data is incomplete
+## 7. Backup script if data is incomplete
 
 If the first run returns `NEED_DATA`:
 - use the chat sidebar to add one clarifying message
 - mention preferred sweetener policy or protein source
 - resume the same run instead of starting a new search
 
-## 7. Fallback safe path
+## 8. Fallback safe path
 
 If evidence is weak or conflicting:
 - highlight the `WAIT` or `AVOID` verdict

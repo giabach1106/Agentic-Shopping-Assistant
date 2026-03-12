@@ -21,13 +21,14 @@ This build is optimized for supplements and whey protein:
 2. Frontend creates a session with `POST /v1/sessions`.
 3. User prompt goes to `POST /v1/chat`.
 4. Backend checks cached evidence first, then collects only when coverage is insufficient.
-5. UI renders:
+5. Coverage auditor checks cache + catalog before crawl.
+6. UI renders:
    - verdict and trust score
    - scientific score radar, source-mix chart, and ABSA chart
    - structured trace timeline and ranked evidence table
    - shortlist of products from session state
    - product detail with ingredient charts and source links
-6. Follow-up questions continue in the same session with `POST /v1/runs/{session_id}/resume`.
+7. Follow-up questions continue in the same session with `POST /v1/runs/{session_id}/resume`.
 
 ## Repository layout
 
@@ -47,6 +48,7 @@ AWS_REGION=us-east-1
 AGENT_SQLITE_PATH=backend/data/agent_memory.sqlite3
 AGENT_REDIS_URL=redis://localhost:6379/0
 AGENT_CORS_ALLOW_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+AGENT_REQUIRE_AUTH=true
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 NEXT_PUBLIC_COGNITO_DOMAIN=your-domain.auth.us-east-1.amazoncognito.com
 NEXT_PUBLIC_COGNITO_CLIENT_ID=your-client-id
@@ -56,6 +58,7 @@ NEXT_PUBLIC_COGNITO_REDIRECT_URI=http://localhost:3000
 Important:
 - `NEXT_PUBLIC_*` values are consumed by the frontend.
 - `AGENT_CORS_ALLOW_ORIGINS` must include the frontend origin or browser preflight will fail.
+- `AGENT_REQUIRE_AUTH=true` enforces strict bearer auth for `/v1/*`.
 - `MOCK_MODEL=true` is the easiest local demo mode.
 - If Redis is unavailable, backend falls back to in-memory checkpoints.
 
@@ -88,6 +91,15 @@ npm run dev
 Frontend URL:
 - App: `http://localhost:3000`
 
+### 4. Warm up catalog (optional but recommended before demo)
+
+```bash
+cd backend
+python scripts/warmup_supplements_catalog.py --target 100
+```
+
+This seeds DB-first catalog records used by the coverage auditor before live crawl.
+
 ## Docker compose
 
 Run the full stack:
@@ -117,6 +129,7 @@ Notes:
 - `GET /v1/recommendations/{session_id}`
 - `GET /v1/metrics/runtime`
 - `POST /v1/voice/consult`
+- `GET /v1/metrics/catalog`
 
 ## Testing
 

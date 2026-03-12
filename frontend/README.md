@@ -25,6 +25,7 @@ Backend note:
 
 ```env
 AGENT_CORS_ALLOW_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+AGENT_REQUIRE_AUTH=true
 ```
 
 ## Run locally
@@ -52,7 +53,7 @@ npm run start
 
 ## Notes
 
-- If Cognito env vars are present, the UI requires login before creating sessions.
-- If Cognito env vars are omitted, the UI falls back to guest mode for local demo work.
-- The backend currently parses bearer token claims but does not fully enforce JWT verification.
+- This sprint enforces strict auth: no guest mode for `/v1/*` flows.
+- Missing Cognito env values surface explicit setup errors in the UI shell.
+- The backend enforces bearer token presence and required claims for protected routes.
 - `NEXT_PUBLIC_*` variables must be available when building Docker images because they are inlined into the client bundle.
