@@ -34,7 +34,13 @@ function loadRootEnvDefaults() {
       continue;
     }
     const key = line.slice(0, separatorIndex).trim();
-    if (!key || process.env[key]) {
+    if (!key) {
+      continue;
+    }
+
+    // Keep root .env as single source of truth for browser-exposed settings.
+    const shouldOverride = key.startsWith('NEXT_PUBLIC_');
+    if (!shouldOverride && process.env[key]) {
       continue;
     }
     const rawValue = line.slice(separatorIndex + 1);
