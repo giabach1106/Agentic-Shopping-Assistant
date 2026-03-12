@@ -32,7 +32,6 @@ import {
   YAxis,
 } from "recharts";
 
-import { ProductCard } from "@/components/product-card";
 import { TracePanel } from "@/components/trace-panel";
 import { useAppShellState } from "@/hooks/use-app-shell-state";
 import {
@@ -444,111 +443,348 @@ function ResultsContent() {
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-8 md:px-8 md:py-12">
-      <section className="grid gap-6 xl:grid-cols-[1.18fr_0.82fr]">
-        <div className="rounded-[2.5rem] border border-[color:var(--border-strong)] bg-[color:var(--surface)] p-7 shadow-[var(--shadow-strong)]">
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-2 text-xs uppercase tracking-[0.3em] text-[color:var(--text-muted)]">
-              <Sparkles className="h-3.5 w-3.5 text-[color:var(--accent)]" />
-              Session-bound analysis
-            </span>
-            {activeSessionId ? <span className="rounded-full border border-[color:var(--border)] px-4 py-2 text-xs text-[color:var(--text-muted)]">Session {activeSessionId.slice(0, 10)}</span> : null}
-          </div>
-          <h1 className="mt-5 max-w-4xl text-4xl font-semibold leading-[1.02] tracking-[-0.05em] text-[color:var(--text-strong)] md:text-5xl">{currentPrompt}</h1>
-          <p className="mt-4 max-w-3xl text-base leading-8 text-[color:var(--text-soft)]">
-            The agent compares cached evidence, review authenticity, ingredient signals, and checkout viability before recommending an action.
-          </p>
-          <div className="mt-8 grid gap-4 md:grid-cols-4">
-            <MetricCard label="Verdict" value={recommendation?.decision?.verdict ?? "Pending"} />
-            <MetricCard label="Trust score" value={recommendation?.scientificScore.finalTrust ?? 0} tone={scoreTone(recommendation?.scientificScore.finalTrust ?? 0)} />
-            <MetricCard label="Source coverage" value={`${recommendation?.evidenceStats.sourceCoverage ?? 0} sources`} />
-            <MetricCard label="Evidence freshness" value={formatFreshness(recommendation?.evidenceStats.freshnessSeconds ?? 0)} />
-          </div>
-          <div className="mt-8 grid gap-4 lg:grid-cols-2">
-            <div className="rounded-[1.8rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-5">
-              <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Agent response</p>
-              <p className="mt-4 text-sm leading-7 text-[color:var(--text-soft)]">{agentReplyText}</p>
-              {needsFollowUp ? <div className="mt-4 rounded-[1.3rem] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">The orchestrator needs more detail before finalizing. Reply in the chat panel to continue the same run.</div> : null}
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_25.5rem]">
+        <div className="min-w-0 space-y-8">
+          <section className="rounded-[2.5rem] border border-[color:var(--border-strong)] bg-[color:var(--surface)] p-7 shadow-[var(--shadow-strong)]">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-2 text-xs uppercase tracking-[0.3em] text-[color:var(--text-muted)]">
+                <Sparkles className="h-3.5 w-3.5 text-[color:var(--accent)]" />
+                Session-bound analysis
+              </span>
+              {activeSessionId ? (
+                <span className="rounded-full border border-[color:var(--border)] px-4 py-2 text-xs text-[color:var(--text-muted)]">
+                  Session {activeSessionId.slice(0, 10)}
+                </span>
+              ) : null}
             </div>
-            <div className="rounded-[1.8rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-5">
-              <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Decision factors</p>
-              <div className="mt-4 grid gap-3">
-                {(recommendation?.decision?.topReasons ?? []).slice(0, 3).map((reason) => (
-                  <div key={reason} className="rounded-[1.2rem] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-[color:var(--text-soft)]">{reason}</div>
-                ))}
+            <h1 className="mt-5 max-w-4xl text-4xl font-semibold leading-[1.02] tracking-[-0.05em] text-[color:var(--text-strong)] md:text-5xl">
+              {currentPrompt}
+            </h1>
+            <div className="mt-8 grid gap-4 md:grid-cols-4">
+              <MetricCard label="Verdict" value={recommendation?.decision?.verdict ?? "Pending"} />
+              <MetricCard
+                label="Trust score"
+                value={recommendation?.scientificScore.finalTrust ?? 0}
+                tone={scoreTone(recommendation?.scientificScore.finalTrust ?? 0)}
+              />
+              <MetricCard
+                label="Source coverage"
+                value={`${recommendation?.evidenceStats.sourceCoverage ?? 0} sources`}
+              />
+              <MetricCard
+                label="Evidence freshness"
+                value={formatFreshness(recommendation?.evidenceStats.freshnessSeconds ?? 0)}
+              />
+            </div>
+            <div className="mt-8 grid gap-4 lg:grid-cols-2">
+              <div className="rounded-[1.8rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-5">
+                <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Agent response</p>
+                <p className="mt-4 text-sm leading-7 text-[color:var(--text-soft)]">{agentReplyText}</p>
+                {needsFollowUp ? (
+                  <div className="mt-4 rounded-[1.3rem] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+                    The orchestrator needs more detail before finalizing. Reply in the chat panel to continue the run.
+                  </div>
+                ) : null}
+              </div>
+              <div className="rounded-[1.8rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-5">
+                <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Decision factors</p>
+                <div className="mt-4 grid gap-3">
+                  {(recommendation?.decision?.topReasons ?? []).slice(0, 3).map((reason) => (
+                    <div
+                      key={reason}
+                      className="rounded-[1.2rem] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-[color:var(--text-soft)]"
+                    >
+                      {reason}
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
-          </div>
-          <div className="mt-8">
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Immediate shortlist</p>
-              <span className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--text-muted)]">
-                {topProducts.length} products
-              </span>
-            </div>
-            {topProducts.length ? (
-              <div className="grid gap-4 md:grid-cols-2">
-                {topProducts.map((product) => {
-                  const imageUrl =
-                    typeof product.imageUrl === "string" && product.imageUrl.startsWith("http")
-                      ? product.imageUrl
-                      : null;
-                  return (
-                    <article key={product.productId} className="overflow-hidden rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)]">
-                      <div className="relative h-44 w-full bg-[color:var(--surface-muted)]">
-                        {imageUrl ? (
-                          <Image
-                            src={imageUrl}
-                            alt={product.title}
-                            fill
-                            className="object-cover"
-                          />
-                        ) : (
-                          <div className="flex h-full items-center justify-center text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
-                            No image
-                          </div>
-                        )}
-                      </div>
-                      <div className="space-y-3 p-4">
-                        <p className="text-xs uppercase tracking-[0.22em] text-[color:var(--text-muted)]">{product.storeName}</p>
-                        <h3 className="line-clamp-2 text-lg font-semibold leading-7 text-[color:var(--text-strong)]">{product.title}</h3>
-                        <div className="flex flex-wrap items-center gap-3 text-sm text-[color:var(--text-soft)]">
-                          <span className="font-semibold text-[color:var(--text-strong)]">${product.price.toFixed(2)}</span>
-                          <span>{product.rating ? product.rating.toFixed(1) : "n/a"} stars</span>
+
+            <div className="mt-8">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Immediate shortlist</p>
+                <span className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--text-muted)]">
+                  {topProducts.length} products
+                </span>
+              </div>
+              {topProducts.length ? (
+                <div className="grid gap-4 md:grid-cols-2">
+                  {topProducts.map((product) => {
+                    const imageUrl =
+                      typeof product.imageUrl === "string" && product.imageUrl.startsWith("http")
+                        ? product.imageUrl
+                        : null;
+                    return (
+                      <article
+                        key={product.productId}
+                        className="overflow-hidden rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)]"
+                      >
+                        <div className="relative h-44 w-full bg-[color:var(--surface-muted)]">
+                          {imageUrl ? (
+                            <Image src={imageUrl} alt={product.title} fill className="object-cover" />
+                          ) : (
+                            <div className="flex h-full items-center justify-center text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                              No image
+                            </div>
+                          )}
                         </div>
-                        <Link
-                          href={`/product/${product.productId}?session=${activeSessionId}`}
-                          className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-4 py-2 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
-                        >
-                          Analyze product
-                          <ChevronRight className="h-4 w-4" />
-                        </Link>
-                      </div>
-                    </article>
-                  );
-                })}
+                        <div className="space-y-3 p-4">
+                          <p className="text-xs uppercase tracking-[0.22em] text-[color:var(--text-muted)]">
+                            {product.storeName}
+                          </p>
+                          <h3 className="line-clamp-2 text-lg font-semibold leading-7 text-[color:var(--text-strong)]">
+                            {product.title}
+                          </h3>
+                          <div className="flex flex-wrap items-center gap-3 text-sm text-[color:var(--text-soft)]">
+                            <span className="font-semibold text-[color:var(--text-strong)]">
+                              ${product.price.toFixed(2)}
+                            </span>
+                            <span>{product.rating ? product.rating.toFixed(1) : "n/a"} stars</span>
+                          </div>
+                          <Link
+                            href={`/product/${product.productId}?session=${activeSessionId}`}
+                            className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-4 py-2 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
+                          >
+                            Analyze product
+                            <ChevronRight className="h-4 w-4" />
+                          </Link>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text-soft)]">
+                  No product cards available yet. Continue chat to unlock candidate extraction.
+                </div>
+              )}
+            </div>
+          </section>
+
+          <Panel eyebrow="Recommendation" title="Best current match">
+            {selectedProduct ? (
+              <div className="grid gap-5 lg:grid-cols-[1fr_0.9fr]">
+                <div className="rounded-[1.7rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-5">
+                  <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                    {selectedProduct.storeName}
+                  </p>
+                  <h3 className="mt-3 text-3xl font-semibold text-[color:var(--text-strong)]">
+                    {selectedProduct.title}
+                  </h3>
+                  <p className="mt-4 text-sm leading-7 text-[color:var(--text-soft)]">
+                    {selectedProduct.ingredientAnalysis.summary}
+                  </p>
+                  <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-[color:var(--text-soft)]">
+                    <span className="text-lg font-semibold text-[color:var(--text-strong)]">
+                      ${selectedProduct.price.toFixed(2)}
+                    </span>
+                    <span>{selectedProduct.shippingETA}</span>
+                    <span>{selectedProduct.returnPolicy}</span>
+                  </div>
+                </div>
+                <div className="grid gap-4">
+                  <MetricCard
+                    label="Ingredient score"
+                    value={selectedProduct.ingredientAnalysis.score}
+                    tone={scoreTone(selectedProduct.ingredientAnalysis.score)}
+                  />
+                  <div className="rounded-[1.7rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-5">
+                    <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                      Checkout status
+                    </p>
+                    <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">
+                      <ShieldCheck className="h-4 w-4" />
+                      {selectedProduct.checkoutReady
+                        ? "Ready for checkout handoff"
+                        : "Needs extra checkout verification"}
+                    </div>
+                    <Link
+                      href={`/product/${selectedProduct.productId}?session=${activeSessionId}`}
+                      className="mt-4 inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-4 py-2 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
+                    >
+                      Full analysis
+                      <ChevronRight className="h-4 w-4" />
+                    </Link>
+                  </div>
+                </div>
               </div>
             ) : (
-              <div className="rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text-soft)]">
-                No product cards available yet. Continue chat to unlock candidate extraction.
-              </div>
+              <p className="text-sm leading-7 text-[color:var(--text-soft)]">
+                No candidate products are available yet for this session.
+              </p>
             )}
-          </div>
+          </Panel>
+
+          <details className="group rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
+            <summary className="cursor-pointer list-none">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">
+                    Session diagnostics
+                  </p>
+                  <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">
+                    Expand full reasoning and evidence charts
+                  </h2>
+                </div>
+                <span className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--text-muted)]">
+                  Optional
+                </span>
+              </div>
+            </summary>
+
+            <div className="mt-6 grid gap-8 xl:grid-cols-[1.1fr_0.9fr]">
+              <div className="space-y-8">
+                <TracePanel trace={recommendation?.trace ?? []} />
+
+                <Panel eyebrow="Evidence ledger" title="Ranked review evidence">
+                  <div className="overflow-hidden rounded-[1.5rem] border border-[color:var(--border)]">
+                    <div className="grid grid-cols-[0.24fr_0.18fr_0.18fr_1fr] bg-[color:var(--surface-strong)] px-4 py-3 text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
+                      <span>Source</span>
+                      <span>Quality</span>
+                      <span>Promo</span>
+                      <span>Excerpt</span>
+                    </div>
+                    {reviewInsights.rankedEvidence.slice(0, 5).map((item) => (
+                      <div
+                        key={`${item.docId}-${item.source}`}
+                        className="grid grid-cols-[0.24fr_0.18fr_0.18fr_1fr] gap-3 border-t border-[color:var(--border)] px-4 py-4 text-sm"
+                      >
+                        <span className="font-medium capitalize text-[color:var(--text-strong)]">{item.source}</span>
+                        <span className={scoreTone(item.qualityScore)}>{item.qualityScore}</span>
+                        <span className="text-[color:var(--text-soft)]">{item.promoSignals.length}</span>
+                        <span className="text-[color:var(--text-soft)]">{item.excerpt || item.docId}</span>
+                      </div>
+                    ))}
+                    {!reviewInsights.rankedEvidence.length ? (
+                      <div className="border-t border-[color:var(--border)] px-4 py-4 text-sm text-[color:var(--text-soft)]">
+                        Ranked evidence will appear when the review agent has enough context.
+                      </div>
+                    ) : null}
+                  </div>
+                </Panel>
+              </div>
+
+              <div className="space-y-8">
+                <Panel eyebrow="Decision matrix" title="Scientific trust radar">
+                  <div className="h-80">
+                    <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={280}>
+                      <RadarChart data={trustRadarData}>
+                        <PolarGrid stroke="var(--border)" />
+                        <PolarAngleAxis dataKey="metric" tick={{ fill: "currentColor", fontSize: 12 }} />
+                        <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
+                        <Radar dataKey="value" stroke="var(--accent)" fill="var(--accent)" fillOpacity={0.18} />
+                      </RadarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </Panel>
+
+                <Panel eyebrow="Evidence posture" title="Collection diagnostics">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <MetricCard label="Cache status" value={collectionInsights.cacheStatus} />
+                    <MetricCard label="Catalog status" value={recommendation?.coverageAudit?.catalogStatus ?? "unknown"} />
+                    <MetricCard label="Evidence quality" value={reviewInsights.evidenceQualityScore} tone={scoreTone(reviewInsights.evidenceQualityScore)} />
+                    <MetricCard label="Review confidence" value={reviewInsights.confidence} tone={scoreTone(reviewInsights.confidence)} />
+                    <MetricCard label="Duplicate clusters" value={reviewInsights.duplicateReviewClusters} />
+                    <MetricCard label="Crawler" value={recommendation?.coverageAudit?.crawlPerformed ? "expanded" : "skipped"} />
+                  </div>
+                  {!collectionInsights.isSufficient || collectionInsights.sufficiencyMissing.length ? (
+                    <div className="mt-4 rounded-[1.4rem] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+                      Missing thresholds: {collectionInsights.sufficiencyMissing.join(", ") || "collector filled the gap"}
+                    </div>
+                  ) : null}
+                </Panel>
+
+                <Panel eyebrow="Review coverage" title="Source mix">
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={240}>
+                      <BarChart data={sourceMixData} barSize={38}>
+                        <CartesianGrid vertical={false} stroke="var(--border)" />
+                        <XAxis dataKey="source" tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
+                        <YAxis allowDecimals={false} tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
+                        <Tooltip />
+                        <Bar dataKey="count" fill="var(--text-strong)" radius={[14, 14, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </Panel>
+
+                <Panel eyebrow="Aspect signals" title="ABSA alignment">
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={240}>
+                      <BarChart data={absaData} barSize={30} layout="vertical">
+                        <CartesianGrid horizontal={false} stroke="var(--border)" />
+                        <XAxis type="number" domain={[0, 100]} tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
+                        <YAxis dataKey="aspect" type="category" tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} width={84} />
+                        <Tooltip />
+                        <Bar dataKey="score" fill="var(--accent)" radius={[0, 14, 14, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </Panel>
+
+                <Panel eyebrow="Risk log" title="Flags and blockers">
+                  <div className="space-y-3">
+                    {[...(recommendation?.decision?.riskFlags ?? []), ...reviewInsights.riskFlags].map((riskFlag) => (
+                      <div key={riskFlag} className="rounded-[1.4rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-300">
+                        {riskFlag}
+                      </div>
+                    ))}
+                    {(recommendation?.blockingAgents ?? []).map((agent) => (
+                      <div key={agent} className="rounded-[1.4rem] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+                        Blocked by {agent}
+                      </div>
+                    ))}
+                    {!recommendation?.decision?.riskFlags?.length && !recommendation?.blockingAgents?.length && !reviewInsights.riskFlags.length ? (
+                      <div className="rounded-[1.4rem] border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300">
+                        No major blockers detected in the current session state.
+                      </div>
+                    ) : null}
+                  </div>
+                </Panel>
+
+                <Panel eyebrow="References" title="Evidence links">
+                  <div className="space-y-3">
+                    {referenceLinks.map((ref) => (
+                      <a key={ref} href={ref} target="_blank" rel="noreferrer" className="flex items-center justify-between gap-4 rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text-soft)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--text-strong)]">
+                        <span className="truncate">{ref}</span>
+                        <ExternalLink className="h-4 w-4 shrink-0" />
+                      </a>
+                    ))}
+                    {!referenceLinks.length ? (
+                      <div className="rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text-soft)]">
+                        Reference links will appear after evidence is collected.
+                      </div>
+                    ) : null}
+                  </div>
+                </Panel>
+              </div>
+            </div>
+          </details>
+
+          <Link href="/history" className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-4 py-3 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]">
+            <CheckCircle2 className="h-4 w-4" />
+            Open session history
+          </Link>
         </div>
 
-        <aside className="flex flex-col rounded-[2.4rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)] xl:sticky xl:top-24 xl:h-[calc(100vh-7.5rem)]">
+        <aside className="flex flex-col rounded-[2.4rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)] xl:sticky xl:top-24 xl:h-[calc(100vh-7rem)]">
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Live session</p>
               <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Follow-up console</h2>
             </div>
-            <div className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--text-muted)]">{messages.length} messages</div>
+            <div className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--text-muted)]">
+              {messages.length} messages
+            </div>
           </div>
           <div ref={chatScrollRef} className="mt-6 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
             {messages.map((message, index) => {
               const isUser = message.role === "user";
-              const meta = !isUser && message.meta && typeof message.meta === "object"
-                ? (message.meta as Record<string, unknown>)
-                : null;
+              const meta =
+                !isUser && message.meta && typeof message.meta === "object"
+                  ? (message.meta as Record<string, unknown>)
+                  : null;
               const topReasons = Array.isArray(meta?.topReasons)
                 ? meta?.topReasons.map((item) => String(item))
                 : [];
@@ -557,13 +793,21 @@ function ResultsContent() {
                 : [];
               return (
                 <div key={`${message.createdAt}-${message.clientId ?? index}`} className={`flex gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
-                  {!isUser ? <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[color:var(--accent-soft)] text-[color:var(--accent)]"><Bot className="h-4 w-4" /></div> : null}
+                  {!isUser ? (
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[color:var(--accent-soft)] text-[color:var(--accent)]">
+                      <Bot className="h-4 w-4" />
+                    </div>
+                  ) : null}
                   <div className={`max-w-[84%] rounded-[1.5rem] px-4 py-3 text-sm leading-7 ${isUser ? "bg-[color:var(--text-strong)] text-[color:var(--background)]" : "border border-[color:var(--border)] bg-[color:var(--surface-strong)] text-[color:var(--text-soft)]"}`}>
                     <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-[0.24em] opacity-70">
                       {isUser ? <User className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
                       {message.role}
                       <span>{formatTimestamp(message.createdAt)}</span>
-                      {message.optimistic ? <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[10px]">sending</span> : null}
+                      {message.optimistic ? (
+                        <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[10px]">
+                          sending
+                        </span>
+                      ) : null}
                     </div>
                     <p>{meta?.summary ? String(meta.summary) : message.content}</p>
                     {!isUser && meta ? (
@@ -574,7 +818,8 @@ function ResultsContent() {
                         <div className="mt-2 space-y-2 text-xs leading-6">
                           {typeof meta.verdict === "string" || typeof meta.trust === "number" ? (
                             <p>
-                              Verdict: {String(meta.verdict || "pending")} | Trust: {typeof meta.trust === "number" ? meta.trust.toFixed(2) : "n/a"}
+                              Verdict: {String(meta.verdict || "pending")} | Trust:{" "}
+                              {typeof meta.trust === "number" ? meta.trust.toFixed(2) : "n/a"}
                             </p>
                           ) : null}
                           {topReasons.length ? <p>Factors: {topReasons.join(" | ")}</p> : null}
@@ -588,7 +833,9 @@ function ResultsContent() {
             })}
           </div>
           <div className="mt-6 space-y-3">
-            <label className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">{needsFollowUp ? "Resume blocked run" : "Refine the brief"}</label>
+            <label className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">
+              {needsFollowUp ? "Resume blocked run" : "Refine the brief"}
+            </label>
             <textarea
               value={chatInput}
               onChange={(event) => setChatInput(event.target.value)}
@@ -605,171 +852,14 @@ function ResultsContent() {
               {sending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
               {needsFollowUp ? "Resume agent" : "Send follow-up"}
             </button>
-            {error ? <div className="rounded-[1.4rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-300">{error}</div> : null}
+            {error ? (
+              <div className="rounded-[1.4rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-300">
+                {error}
+              </div>
+            ) : null}
           </div>
         </aside>
-      </section>
-
-      <section className="grid gap-8 xl:grid-cols-[1.1fr_0.9fr]">
-        <div className="space-y-8">
-          <Panel eyebrow="Recommendation" title="Best current match">
-            {selectedProduct ? (
-              <div className="grid gap-5 lg:grid-cols-[1fr_0.9fr]">
-                <div className="rounded-[1.7rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-5">
-                  <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">{selectedProduct.storeName}</p>
-                  <h3 className="mt-3 text-3xl font-semibold text-[color:var(--text-strong)]">{selectedProduct.title}</h3>
-                  <p className="mt-4 text-sm leading-7 text-[color:var(--text-soft)]">{selectedProduct.ingredientAnalysis.summary}</p>
-                  <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-[color:var(--text-soft)]">
-                    <span className="text-lg font-semibold text-[color:var(--text-strong)]">${selectedProduct.price.toFixed(2)}</span>
-                    <span>{selectedProduct.shippingETA}</span>
-                    <span>{selectedProduct.returnPolicy}</span>
-                  </div>
-                </div>
-                <div className="grid gap-4">
-                  <MetricCard label="Ingredient score" value={selectedProduct.ingredientAnalysis.score} tone={scoreTone(selectedProduct.ingredientAnalysis.score)} />
-                  <div className="rounded-[1.7rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-5">
-                    <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Checkout status</p>
-                    <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">
-                      <ShieldCheck className="h-4 w-4" />
-                      {selectedProduct.checkoutReady ? "Ready for checkout handoff" : "Needs extra checkout verification"}
-                    </div>
-                    <Link href={`/product/${selectedProduct.productId}?session=${activeSessionId}`} className="mt-4 inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-4 py-2 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]">
-                      Full analysis
-                      <ChevronRight className="h-4 w-4" />
-                    </Link>
-                  </div>
-                </div>
-              </div>
-            ) : <p className="text-sm leading-7 text-[color:var(--text-soft)]">No candidate products are available yet for this session.</p>}
-          </Panel>
-
-          <Panel eyebrow="Shortlist" title={`Candidate products - ${topProducts.length}`}>
-            <div className="space-y-5">
-              {topProducts.map((product) => (
-                <ProductCard key={product.productId} product={product} sessionId={activeSessionId ?? ""} />
-              ))}
-            </div>
-          </Panel>
-
-          <TracePanel trace={recommendation?.trace ?? []} />
-        </div>
-
-        <div className="space-y-8">
-          <Panel eyebrow="Decision matrix" title="Scientific trust radar">
-            <div className="h-80">
-              <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={280}>
-                <RadarChart data={trustRadarData}>
-                  <PolarGrid stroke="var(--border)" />
-                  <PolarAngleAxis dataKey="metric" tick={{ fill: "currentColor", fontSize: 12 }} />
-                  <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
-                  <Radar dataKey="value" stroke="var(--accent)" fill="var(--accent)" fillOpacity={0.18} />
-                </RadarChart>
-              </ResponsiveContainer>
-            </div>
-          </Panel>
-
-          <Panel eyebrow="Evidence posture" title="Collection diagnostics">
-            <div className="grid gap-3 md:grid-cols-2">
-              <MetricCard label="Cache status" value={collectionInsights.cacheStatus} />
-              <MetricCard label="Catalog status" value={recommendation?.coverageAudit?.catalogStatus ?? "unknown"} />
-              <MetricCard label="Evidence quality" value={reviewInsights.evidenceQualityScore} tone={scoreTone(reviewInsights.evidenceQualityScore)} />
-              <MetricCard label="Review confidence" value={reviewInsights.confidence} tone={scoreTone(reviewInsights.confidence)} />
-              <MetricCard label="Duplicate clusters" value={reviewInsights.duplicateReviewClusters} />
-              <MetricCard label="Crawler" value={recommendation?.coverageAudit?.crawlPerformed ? "expanded" : "skipped"} />
-            </div>
-            {!collectionInsights.isSufficient || collectionInsights.sufficiencyMissing.length ? <div className="mt-4 rounded-[1.4rem] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">Missing thresholds: {collectionInsights.sufficiencyMissing.join(", ") || "collector filled the gap"}</div> : null}
-          </Panel>
-
-          <Panel eyebrow="Review coverage" title="Source mix">
-            <div className="h-72">
-              <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={240}>
-                <BarChart data={sourceMixData} barSize={38}>
-                  <CartesianGrid vertical={false} stroke="var(--border)" />
-                  <XAxis dataKey="source" tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
-                  <YAxis allowDecimals={false} tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
-                  <Tooltip />
-                  <Bar dataKey="count" fill="var(--text-strong)" radius={[14, 14, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </Panel>
-
-          <Panel eyebrow="Aspect signals" title="ABSA alignment">
-            <div className="h-72">
-              <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={240}>
-                <BarChart data={absaData} barSize={30} layout="vertical">
-                  <CartesianGrid horizontal={false} stroke="var(--border)" />
-                  <XAxis type="number" domain={[0, 100]} tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
-                  <YAxis dataKey="aspect" type="category" tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} width={84} />
-                  <Tooltip />
-                  <Bar dataKey="score" fill="var(--accent)" radius={[0, 14, 14, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </Panel>
-
-          <Panel eyebrow="Evidence ledger" title="Ranked review evidence">
-            <div className="overflow-hidden rounded-[1.5rem] border border-[color:var(--border)]">
-              <div className="grid grid-cols-[0.24fr_0.18fr_0.18fr_1fr] bg-[color:var(--surface-strong)] px-4 py-3 text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
-                <span>Source</span>
-                <span>Quality</span>
-                <span>Promo</span>
-                <span>Excerpt</span>
-              </div>
-              {reviewInsights.rankedEvidence.slice(0, 5).map((item) => (
-                <div key={`${item.docId}-${item.source}`} className="grid grid-cols-[0.24fr_0.18fr_0.18fr_1fr] gap-3 border-t border-[color:var(--border)] px-4 py-4 text-sm">
-                  <span className="font-medium capitalize text-[color:var(--text-strong)]">{item.source}</span>
-                  <span className={scoreTone(item.qualityScore)}>{item.qualityScore}</span>
-                  <span className="text-[color:var(--text-soft)]">{item.promoSignals.length}</span>
-                  <span className="text-[color:var(--text-soft)]">{item.excerpt || item.docId}</span>
-                </div>
-              ))}
-              {!reviewInsights.rankedEvidence.length ? (
-                <div className="border-t border-[color:var(--border)] px-4 py-4 text-sm text-[color:var(--text-soft)]">
-                  Ranked evidence will appear when the review agent has enough context.
-                </div>
-              ) : null}
-            </div>
-          </Panel>
-
-          <Panel eyebrow="Risk log" title="Flags and blockers">
-            <div className="space-y-3">
-              {[...(recommendation?.decision?.riskFlags ?? []), ...reviewInsights.riskFlags].map((riskFlag) => (
-                <div key={riskFlag} className="rounded-[1.4rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-300">{riskFlag}</div>
-              ))}
-              {(recommendation?.blockingAgents ?? []).map((agent) => (
-                <div key={agent} className="rounded-[1.4rem] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">Blocked by {agent}</div>
-              ))}
-              {!recommendation?.decision?.riskFlags?.length && !recommendation?.blockingAgents?.length && !reviewInsights.riskFlags.length ? (
-                <div className="rounded-[1.4rem] border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300">
-                  No major blockers detected in the current session state.
-                </div>
-              ) : null}
-            </div>
-          </Panel>
-
-          <Panel eyebrow="References" title="Evidence links">
-            <div className="space-y-3">
-              {referenceLinks.map((ref) => (
-                <a key={ref} href={ref} target="_blank" rel="noreferrer" className="flex items-center justify-between gap-4 rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text-soft)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--text-strong)]">
-                  <span className="truncate">{ref}</span>
-                  <ExternalLink className="h-4 w-4 shrink-0" />
-                </a>
-              ))}
-              {!referenceLinks.length ? (
-                <div className="rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text-soft)]">
-                  Reference links will appear after evidence is collected.
-                </div>
-              ) : null}
-            </div>
-          </Panel>
-
-          <Link href="/history" className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-4 py-3 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]">
-            <CheckCircle2 className="h-4 w-4" />
-            Open session history
-          </Link>
-        </div>
-      </section>
+      </div>
     </div>
   );
 }

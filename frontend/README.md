@@ -60,4 +60,4 @@ npm run start
 - `NEXT_PUBLIC_*` variables must be available when building Docker images because they are inlined into the client bundle.
 - Docker build arg `REQUIRE_COGNITO_ENV=true` can be used in CI to hard-fail when Cognito vars are missing.
 - Frontend now falls back to loading `../.env`, so `frontend/.env.local` is optional.
-- Set `NEXT_PUBLIC_USE_COGNITO_HOSTED_LOGOUT=true` only when Cognito app client has a valid allowed sign-out URL.
+- Hosted logout is only enabled when both of these are set: `NEXT_PUBLIC_USE_COGNITO_HOSTED_LOGOUT=true` and `NEXT_PUBLIC_COGNITO_LOGOUT_URI`.

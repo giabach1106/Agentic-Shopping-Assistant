@@ -15,8 +15,7 @@ function getCognitoConfig() {
   const domain = process.env.NEXT_PUBLIC_COGNITO_DOMAIN?.trim();
   const clientId = process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID?.trim();
   const redirectUri = process.env.NEXT_PUBLIC_COGNITO_REDIRECT_URI?.trim();
-  const logoutUri =
-    process.env.NEXT_PUBLIC_COGNITO_LOGOUT_URI?.trim() || redirectUri;
+  const logoutUri = process.env.NEXT_PUBLIC_COGNITO_LOGOUT_URI?.trim();
 
   if (!domain || !clientId || !redirectUri) {
     return null;
@@ -176,6 +175,9 @@ export function tryBuildAuthorizeUrl() {
 
 export function tryLogoutUrl() {
   if (process.env.NEXT_PUBLIC_USE_COGNITO_HOSTED_LOGOUT?.trim() !== "true") {
+    return null;
+  }
+  if (!process.env.NEXT_PUBLIC_COGNITO_LOGOUT_URI?.trim()) {
     return null;
   }
   return getCognitoConfig() ? logoutUrl() : null;

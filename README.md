@@ -54,12 +54,14 @@ NEXT_PUBLIC_COGNITO_DOMAIN=your-domain.auth.us-east-1.amazoncognito.com
 NEXT_PUBLIC_COGNITO_CLIENT_ID=your-client-id
 NEXT_PUBLIC_COGNITO_REDIRECT_URI=http://localhost:3000
 NEXT_PUBLIC_USE_COGNITO_HOSTED_LOGOUT=false
+# NEXT_PUBLIC_COGNITO_LOGOUT_URI=http://localhost:3000
 ```
 
 Important:
 - `NEXT_PUBLIC_*` values are consumed by the frontend.
 - Frontend now falls back to `../.env` when running from `frontend/`, so `frontend/.env.local` is optional.
 - Backend now falls back to root `.env` when running from `backend/`, so `backend/.env` is optional.
+- Hosted Cognito logout is opt-in and requires both `NEXT_PUBLIC_USE_COGNITO_HOSTED_LOGOUT=true` and `NEXT_PUBLIC_COGNITO_LOGOUT_URI`.
 - `AGENT_CORS_ALLOW_ORIGINS` must include the frontend origin or browser preflight will fail.
 - `AGENT_REQUIRE_AUTH=true` enforces strict bearer auth for `/v1/*`.
 - `MOCK_MODEL=true` is the easiest local demo mode.
