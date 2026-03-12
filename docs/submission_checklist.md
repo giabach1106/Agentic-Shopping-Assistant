@@ -1,37 +1,41 @@
-# Submission Checklist - Amazon Nova Hackathon
+# Submission Checklist - AgentCart
 
-## Deadlines
+## Product checks
 
-- Submission deadline: **March 16, 2026, 5:00 PM PT**
-- Feedback deadline: **March 18, 2026, 5:00 PM PT**
-- AWS credit request deadline: **March 13, 2026, 5:00 PM PT**
+- [ ] Landing page login and search flow work on `http://localhost:3000`
+- [ ] `/results` creates a session and loads recommendation data from the API
+- [ ] Sidebar follow-up chat resumes the same session
+- [ ] `/history` reopens prior sessions from `GET /v1/sessions`
+- [ ] `/product/[id]` renders ingredient analysis, charts, and source references
+- [ ] Dark mode and light mode both render correctly on desktop and mobile
 
-## Technical checks
+## Backend checks
 
 - [ ] `POST /v1/sessions` works
 - [ ] `POST /v1/chat` works
 - [ ] `POST /v1/runs/{session_id}/resume` works
-- [ ] `GET /v1/recommendations/{session_id}` returns scientific score and risk flags
-- [ ] `GET /v1/sessions/{session_id}` returns checkpoint trace
-- [ ] Test suite passes (`pytest -q`)
-- [ ] Realtime collector returns at least one product source from eBay/Walmart/Amazon
+- [ ] `GET /v1/sessions/{session_id}` works
+- [ ] `GET /v1/sessions/{session_id}/products` works
+- [ ] `GET /v1/recommendations/{session_id}` returns decision payload
+- [ ] `pytest -q` passes
 
-## Safety and policy checks
+## Explainability checks
 
-- [ ] UI executor enforces `stop_before_pay=true`
-- [ ] Autofill is only attempted when `consentAutofill=true`
-- [ ] Blocked automation path returns graceful recommendation (`WAIT`/`AVOID`) with risk flags
+- [ ] Trace timeline is visible in results or product detail
+- [ ] Trust score dimensions are visible
+- [ ] Ingredient red flags and beneficial signals are visible
+- [ ] Source links are clickable from the UI
+- [ ] The demo explains DB-first evidence reuse before fresh crawling
 
-## Demo artifacts
+## Safety checks
 
-- [ ] 3-minute demo video script aligned to runbook
-- [ ] Public or shareable code access ready for judging
-- [ ] README/runbook updated for local and docker usage
-- [ ] Judge script includes one normal path and one blocked-automation path
+- [ ] No payment action is executed
+- [ ] Risk flags or blockers are shown when evidence is weak
+- [ ] `NEED_DATA` path can be resumed safely from the same session
 
-## Final packaging
+## Demo package
 
-- [ ] Submission text explains Nova usage (planner/review/visual/executor/decision)
-- [ ] Mention trust scoring dimensions and explainability output
-- [ ] Mention multi-source collector strategy (Amazon optional)
-- [ ] Confirm no payment action is executed in any flow
+- [ ] README matches the current architecture
+- [ ] Docker compose starts frontend, backend, and Redis
+- [ ] Demo script uses the whey / supplements lane
+- [ ] Judge walkthrough includes one normal path and one cautious fallback path

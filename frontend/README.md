@@ -1,20 +1,51 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Frontend - AgentCart
 
-# Run and deploy your AI Studio app
+This frontend is a typed Next.js client for the AgentCart backend.
 
-This contains everything you need to run your app locally.
+## What it does
 
-View your app in AI Studio: https://ai.studio/apps/2edf88a1-211c-42f4-ac89-53edf3d5fc72
+- creates and resumes agent sessions
+- binds chat, recommendations, history, and product detail to one `sessionId`
+- renders trust metrics, evidence diagnostics, and structured trace output
+- shows ingredient analysis and source references for supplements and whey products
+- supports persistent dark/light theme selection
 
-## Run Locally
+## Required env
 
-**Prerequisites:**  Node.js
+Create `frontend/.env.local`:
 
+```env
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+NEXT_PUBLIC_COGNITO_DOMAIN=your-domain.auth.us-east-1.amazoncognito.com
+NEXT_PUBLIC_COGNITO_CLIENT_ID=your-client-id
+NEXT_PUBLIC_COGNITO_REDIRECT_URI=http://localhost:3000
+```
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## Run locally
+
+```bash
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000`.
+
+## Production check
+
+```bash
+npm run build
+npm run start
+```
+
+## Main routes
+
+- `/`: landing page and new search
+- `/results`: session-bound recommendation flow
+- `/history`: session archive from backend
+- `/product/[id]`: product detail for a candidate within a session
+
+## Notes
+
+- The frontend expects Cognito login before search.
+- The backend currently parses bearer token claims but does not fully enforce JWT verification.
+- `NEXT_PUBLIC_*` variables must be available when building Docker images because they are inlined into the client bundle.

@@ -1,14 +1,16 @@
-# Demo Runbook - Agentic Shopping Assistant (Agent Core)
+# Demo Runbook - AgentCart Supplements Lane
 
-## 1) Start services
+## 1. Start services
 
-### Option A: Docker (recommended)
+### Docker
 
 ```bash
 docker compose up --build
 ```
 
-### Option B: Local python
+### Local
+
+Backend:
 
 ```bash
 python -m pip install -r backend/requirements.txt
@@ -16,39 +18,62 @@ cd backend
 uvicorn app.main:app --reload
 ```
 
-## 2) Verify health
+Frontend:
 
 ```bash
-curl http://127.0.0.1:8000/health
+cd frontend
+npm install
+npm run dev
 ```
 
-Expected: `status=ok`, model IDs present, checkpoint backend visible.
+## 2. Verify health
 
-## 3) Run guided demo script
+- Backend health: `http://localhost:8000/health`
+- Frontend: `http://localhost:3000`
 
-From repo root:
+## 3. Recommended demo prompt
 
-```bash
-python backend/scripts/demo_walkthrough.py
+```text
+Find a whey isolate under $90 with third-party testing, low lactose, and no sucralose.
 ```
 
-The script will run:
-- session creation
-- initial chat turn (follow-up expected)
-- resume turn with full constraints
-- recommendation retrieval
-- full snapshot retrieval
+## 4. Live demo flow
 
-## 4) Manual fallback scenario (automation blocked)
+1. Login with Cognito on the landing page.
+2. Submit the whey prompt.
+3. On `/results`, show:
+   - verdict card
+   - trust score and source coverage
+   - agent response panel
+   - session-bound follow-up chat
+   - shortlist cards with ingredient score
+4. Open the top candidate product detail page.
+5. Show:
+   - trust radar chart
+   - ingredient signal chart
+   - evidence coverage chart
+   - beneficial signals vs red flags
+   - source links and trace timeline
+6. Return to `/history` and reopen the same session to prove persistence.
 
-Send chat message with `exclude captcha` and verify:
-- response remains safe (`NEED_DATA` or conservative verdict)
-- `riskFlags`/`blockingAgents` include automation blocker context
-- no payment action is executed
+## 5. Talking points for judges
 
-## 5) Judge-facing talking points
+- The system is session-first: history, chat, decision, and product detail stay tied to one `sessionId`.
+- The backend now uses a DB-first evidence gate and only crawls when cache coverage is insufficient.
+- The supplements lane is stronger than generic shopping because it explains ingredient quality, not just price and stars.
+- The UI does not expose raw chain-of-thought. It shows structured reasoning, blockers, metrics, and evidence links.
+- Checkout automation is intentionally constrained to a stop-before-payment handoff.
 
-- Multi-agent orchestration: planner -> collect -> review -> visual -> price/logistics -> decision.
-- Safety policy: checkout automation always stops before payment.
-- Explainability: recommendation payload includes scientific score, evidence stats, and risk flags.
-- Resilience: realtime collector uses multiple commerce sources (eBay/Walmart/Amazon) and degrades gracefully.
+## 6. Backup script if data is incomplete
+
+If the first run returns `NEED_DATA`:
+- use the chat sidebar to add one clarifying message
+- mention preferred sweetener policy or protein source
+- resume the same run instead of starting a new search
+
+## 7. Fallback safe path
+
+If evidence is weak or conflicting:
+- highlight the `WAIT` or `AVOID` verdict
+- show the risk flags
+- explain that the system prefers no recommendation over an overconfident recommendation

@@ -1,8 +1,63 @@
-# Agentic-Shopping-Assistant
+# AgentCart
 
-## Backend Agent Core (Sprint 1)
+AgentCart is a session-bound shopping agent for hackathon demos where trust matters more than raw search speed.
 
-### Option A: Python `venv` (recommended)
+This build is optimized for supplements and whey protein:
+- DB-first evidence reuse before fresh crawl
+- structured reasoning timeline instead of opaque output
+- ingredient scoring with beneficial signals and red flags
+- session history, product detail, and evidence references in the UI
+- dark/light theme support
+
+## Stack
+
+- Frontend: Next.js 15, React 19, Tailwind CSS 4, Recharts
+- Backend: FastAPI, LangGraph orchestration, SQLite memory/evidence cache, Redis checkpoints
+- Auth: Cognito on the frontend, token passthrough on the backend
+
+## Core demo flow
+
+1. User logs in with Cognito.
+2. Frontend creates a session with `POST /v1/sessions`.
+3. User prompt goes to `POST /v1/chat`.
+4. Backend checks cached evidence first, then collects only when coverage is insufficient.
+5. UI renders:
+   - verdict and trust score
+   - scientific score breakdown
+   - structured trace timeline
+   - shortlist of products from session state
+   - product detail with ingredient charts and source links
+6. Follow-up questions continue in the same session with `POST /v1/runs/{session_id}/resume`.
+
+## Repository layout
+
+- `frontend/`: Next.js app
+- `backend/`: FastAPI app, agent orchestration, tests
+- `docs/`: demo script and submission checklist
+
+## Local setup
+
+### 1. Backend env
+
+Create root `.env` or export equivalent values:
+
+```env
+MOCK_MODEL=true
+AWS_REGION=us-east-1
+AGENT_SQLITE_PATH=backend/data/agent_memory.sqlite3
+AGENT_REDIS_URL=redis://localhost:6379/0
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+NEXT_PUBLIC_COGNITO_DOMAIN=your-domain.auth.us-east-1.amazoncognito.com
+NEXT_PUBLIC_COGNITO_CLIENT_ID=your-client-id
+NEXT_PUBLIC_COGNITO_REDIRECT_URI=http://localhost:3000
+```
+
+Important:
+- `NEXT_PUBLIC_*` values are consumed by the frontend.
+- `MOCK_MODEL=true` is the easiest local demo mode.
+- If Redis is unavailable, backend falls back to in-memory checkpoints.
+
+### 2. Run backend
 
 ```bash
 python -m venv .venv
@@ -16,97 +71,82 @@ cd backend
 uvicorn app.main:app --reload
 ```
 
-### Option B: Conda
+Backend URLs:
+- API: `http://localhost:8000`
+- Health: `http://localhost:8000/health`
+
+### 3. Run frontend
 
 ```bash
-conda create -n agent-shop python=3.12 -y
-conda activate agent-shop
-python -m pip install -r backend/requirements.txt
-cd backend
-uvicorn app.main:app --reload
+cd frontend
+npm install
+npm run dev
 ```
 
-When running locally, `AGENT_SQLITE_PATH` is resolved from your current working directory.
-If you run from repo root, use `AGENT_SQLITE_PATH=backend/data/agent_memory.sqlite3`.
-If you run from `backend/`, use `AGENT_SQLITE_PATH=data/agent_memory.sqlite3`.
+Frontend URL:
+- App: `http://localhost:3000`
 
-### Option C: Docker (backend + Redis)
+## Docker compose
+
+Run the full stack:
 
 ```bash
 docker compose up --build
 ```
 
 This starts:
-- `backend` at `http://127.0.0.1:8000`
-- `redis` at `localhost:6379`
+- `frontend` at `http://localhost:3000`
+- `backend` at `http://localhost:8000`
+- `redis` at `redis://localhost:6379`
 
-Docker compose now loads variables from `.env` for backend (including `MOCK_MODEL`, model IDs, AWS region/credentials).  
-For local mock-only runs, keep `MOCK_MODEL=true`. For real Bedrock calls, set `MOCK_MODEL=false` in `.env`.
-Use Bedrock inference profile IDs available in your account (for example `us.amazon.nova-2-lite-v1:0`).
-Recommended realtime defaults:
-- `NOVA_DEFAULT_MODEL_ID=us.amazon.nova-2-pro-v1:0`
-- `NOVA_FALLBACK_MODEL_ID=us.amazon.nova-2-lite-v1:0`
-For strict realtime/fail-closed behavior, set `RUNTIME_MODE=prod`, `MOCK_MODEL=false`, and use a realtime executor backend.
+Notes:
+- `NEXT_PUBLIC_*` values are passed into the frontend image at build time.
+- `backend/data` is mounted for SQLite persistence.
 
-### Test with CLI chatbot
+## API surface used by the UI
 
-```bash
-# run from backend/
-python scripts/chat_cli.py
-```
+- `POST /v1/sessions`
+- `GET /v1/sessions?limit=&cursor=`
+- `GET /v1/sessions/{session_id}`
+- `GET /v1/sessions/{session_id}/products`
+- `POST /v1/chat`
+- `POST /v1/runs/{session_id}/resume`
+- `GET /v1/recommendations/{session_id}`
+- `GET /v1/metrics/runtime`
+- `POST /v1/voice/consult`
 
-Optional: pass existing session id.
+## Testing
 
-```bash
-python scripts/chat_cli.py --session-id <SESSION_ID>
-```
-
-Optional: inspect agent trace per turn.
-
-```bash
-python scripts/chat_cli.py --verbose
-python scripts/chat_cli.py --raw-state
-```
-
-### Run tests
+Backend:
 
 ```bash
 cd backend
 pytest -q
 ```
 
-### Notes
+Frontend production check:
 
-- If Redis is not running locally, backend will fall back to in-memory checkpoints and show a warning at startup.
-- To remove that warning in local non-docker mode, run Redis and set `AGENT_REDIS_URL=redis://localhost:6379/0`.
-- RAG defaults to `inmemory` for local development.
-- Set `RAG_BACKEND=chroma` to use local persistent Chroma storage (`RAG_CHROMA_PATH`).
-- Set `RAG_BACKEND=bedrock_kb` and `BEDROCK_KB_ID=<your_kb_id>` to use Bedrock Knowledge Bases.
-- Ingest local corpus example:
-  `python backend/scripts/ingest_local_corpus.py --input backend/data/reviews.sample.jsonl`
-- Realtime commerce collector preference is `eBay -> Walmart -> Amazon` (Amazon is optional and non-blocking when alternative product sources are available).
+```bash
+cd frontend
+npm run build
+```
 
-### Useful API endpoints
+## Demo references
 
-- `POST /v1/sessions`: create session ID
-- `POST /v1/chat`: run one agent turn
-- `POST /v1/runs/{session_id}/resume`: resume from checkpoint (requires `message` if follow-up is pending)
-- `GET /v1/sessions/{session_id}`: full snapshot + checkpoint state
-- `GET /v1/recommendations/{session_id}`: latest decision payload for UI consumption
-- `GET /v1/metrics/runtime`: runtime telemetry (calls, fallback count, latency, estimated cost)
-- `POST /v1/voice/consult`: optional Sonic-style consultation (text-simulated voice response)
+- Demo runbook: `docs/demo_runbook.md`
+- Submission checklist: `docs/submission_checklist.md`
 
-### Backend API response contract
+## Suggested judge demo
 
-- `POST /v1/chat` and `GET /v1/recommendations/{session_id}` return:
-  - `status`: `OK | NEED_DATA | ERROR`
-  - `decision`: nullable (null when fail-closed)
-  - `scientificScore`: `ratingReliability`, `spamAuthenticity`, `absaAlignment`, `visualReliability`, `finalTrust`
-  - `evidenceStats`: `sourceCoverage`, `freshnessSeconds`, `reviewCount`, `ratingCount`, `missingFields`
-  - `trace`, `missingEvidence`, `blockingAgents`
+Use a prompt like:
 
-### Demo utilities
+```text
+Find a whey isolate under $90 with third-party testing, low lactose, and no sucralose.
+```
 
-- Guided walkthrough: `python backend/scripts/demo_walkthrough.py`
-- Demo runbook: [`docs/demo_runbook.md`](docs/demo_runbook.md)
-- Submission checklist: [`docs/submission_checklist.md`](docs/submission_checklist.md)
+Then show:
+- session-bound chat history
+- shortlist cards on `/results`
+- trace panel and evidence metrics
+- product detail charts and ingredient flags
+- evidence reference links
