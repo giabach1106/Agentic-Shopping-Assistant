@@ -90,6 +90,10 @@ def test_coverage_auditor_uses_catalog_records(tmp_path: Path) -> None:
         payload = await auditor.run({"category": "whey isolate"})
         assert payload["catalogStatus"] == "hit"
         assert payload["sourceCoverage"] >= 1
+        assert payload["commerceSourceCoverage"] >= 1
+        assert "ratedCandidateCount" in payload
+        assert "ratedCoverageRatio" in payload
+        assert "blockedCommerceSources" in payload
         assert isinstance(payload["sufficiency"]["missing"], list)
 
     asyncio.run(run())
@@ -114,7 +118,25 @@ def test_warmup_record_builder_keeps_required_fields() -> None:
                 "avg_rating": 4.4,
                 "rating_count": 88,
                 "retrieved_at": "2026-03-12T12:00:00+00:00",
-            }
+            },
+            {
+                "source": "ebay",
+                "url": "https://www.ebay.com/sch/i.html?_nkw=creatine+powder",
+                "title": "Creatine Powder eBay search",
+                "price": 0.0,
+                "avg_rating": 0.0,
+                "rating_count": 0,
+                "retrieved_at": "2026-03-12T12:00:00+00:00",
+            },
+            {
+                "source": "amazon",
+                "url": "https://www.amazon.com/dp/B000MISSING",
+                "title": "Missing rating record",
+                "price": 22.0,
+                "avg_rating": 0.0,
+                "rating_count": 0,
+                "retrieved_at": "2026-03-12T12:00:00+00:00",
+            },
         ],
         "reviews": [
             {
@@ -138,3 +160,44 @@ def test_warmup_record_builder_keeps_required_fields() -> None:
     assert row["url"].startswith("http")
     assert isinstance(row["review_snippets"], list)
     assert row["ingredient_text"]
+
+
+def test_catalog_store_normalizes_url_and_rejects_search_pages(tmp_path: Path) -> None:
+    async def run() -> None:
+        settings = _settings(tmp_path)
+        store = SQLiteEvidenceStore(settings.sqlite_path)
+        await store.initialize()
+        await store.upsert_catalog_records(
+            [
+                {
+                    "source": "amazon",
+                    "url": "https://www.amazon.com/dp/B000TEST01/ref=sr_1_1?th=1",
+                    "title": "Canonical URL test product",
+                    "brand": "Canonical Brand",
+                    "price": 49.0,
+                    "rating": 4.5,
+                    "rating_count": 120,
+                    "image_url": "https://images.example.com/p.png",
+                    "ingredient_text": "whey isolate, low lactose",
+                    "review_snippets": ["Mixes well and tastes good."],
+                    "retrieved_at": "2026-03-12T12:00:00+00:00",
+                },
+                {
+                    "source": "walmart",
+                    "url": "https://www.walmart.com/search?q=whey+isolate",
+                    "title": "Walmart search listing",
+                    "price": 0.0,
+                    "rating": 0.0,
+                    "rating_count": 0,
+                    "image_url": "",
+                    "ingredient_text": "",
+                    "review_snippets": [],
+                    "retrieved_at": "",
+                },
+            ]
+        )
+        rows = await store.list_catalog_records(query="canonical", limit=20)
+        assert len(rows) == 1
+        assert rows[0]["url"] == "https://www.amazon.com/dp/B000TEST01"
+
+    asyncio.run(run())

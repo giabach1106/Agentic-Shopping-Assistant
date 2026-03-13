@@ -2,15 +2,33 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import aiosqlite
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_url(value: str) -> str:
+    trimmed = value.strip()
+    if not trimmed:
+        return ""
+    parsed = urlparse(trimmed)
+    normalized = parsed._replace(query="", fragment="")
+    clean_path = re.sub(r"/ref=.*$", "", normalized.path).rstrip("/")
+    normalized = normalized._replace(path=clean_path or "/")
+    return normalized.geturl()
+
+
+def _is_search_listing_url(value: str) -> bool:
+    lower = value.lower()
+    return ("/search?" in lower) or ("/sch/i.html" in lower)
 
 
 def constraint_fingerprint(constraints: dict[str, Any]) -> str:
@@ -129,12 +147,16 @@ class SQLiteEvidenceStore:
         if not records:
             return 0
         now = _now_iso()
+        inserted = 0
         async with aiosqlite.connect(self._db_path) as db:
             for item in records:
                 source = str(item.get("source") or "unknown").strip().lower()
-                url = str(item.get("url") or "").strip()
+                raw_url = str(item.get("url") or "").strip()
+                url = _normalize_url(raw_url)
                 title = str(item.get("title") or "").strip()
                 if not source or not url or not title:
+                    continue
+                if _is_search_listing_url(url):
                     continue
                 brand = str(item.get("brand") or "").strip() or None
                 price = item.get("price")
@@ -150,6 +172,19 @@ class SQLiteEvidenceStore:
                 ][:5]
                 payload = dict(item)
                 retrieved_at = str(item.get("retrieved_at") or item.get("retrievedAt") or now)
+                price_value = float(price) if price is not None else 0.0
+                rating_value = float(rating) if rating is not None else 0.0
+                if (
+                    not brand
+                    or price_value <= 0
+                    or rating_value <= 0
+                    or rating_count <= 0
+                    or not image_url
+                    or not ingredient_text
+                    or not normalized_snippets
+                    or not retrieved_at.strip()
+                ):
+                    continue
                 await db.execute(
                     """
                     INSERT INTO catalog_records (
@@ -188,8 +223,8 @@ class SQLiteEvidenceStore:
                         url,
                         title,
                         brand,
-                        float(price) if price is not None else None,
-                        float(rating) if rating is not None else None,
+                        price_value,
+                        rating_value,
                         rating_count,
                         image_url,
                         ingredient_text,
@@ -200,8 +235,9 @@ class SQLiteEvidenceStore:
                         retrieved_at,
                     ),
                 )
+                inserted += 1
             await db.commit()
-        return len(records)
+        return inserted
 
     async def list_catalog_records(
         self,
@@ -211,6 +247,8 @@ class SQLiteEvidenceStore:
     ) -> list[dict[str, Any]]:
         safe_limit = max(1, min(limit, 500))
         clauses = ["1 = 1"]
+        clauses.append("lower(url) NOT LIKE '%/search?%'")
+        clauses.append("lower(url) NOT LIKE '%/sch/i.html%'")
         params: list[Any] = []
         if query and query.strip():
             terms = [part.strip().lower() for part in query.split() if part.strip()]
@@ -350,3 +388,16 @@ class SQLiteEvidenceStore:
             "latestRetrievedAt": latest_retrieved_at,
             "freshnessSeconds": freshness_seconds,
         }
+
+    async def prune_search_catalog_records(self) -> int:
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                """
+                DELETE FROM catalog_records
+                WHERE lower(url) LIKE '%/search?%'
+                   OR lower(url) LIKE '%/sch/i.html%'
+                   OR lower(url) LIKE '%/ref=%'
+                """
+            )
+            await db.commit()
+            return int(cursor.rowcount or 0)
