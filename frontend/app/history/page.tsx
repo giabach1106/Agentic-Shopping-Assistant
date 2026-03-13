@@ -94,11 +94,11 @@ export default function HistoryPage() {
               Session archive
             </div>
             <h1 className="mt-5 text-4xl font-semibold tracking-[-0.04em] text-[color:var(--text-strong)] md:text-5xl">
-              Re-open previous agent runs.
+              Re-open previous shopping sessions.
             </h1>
             <p className="mt-4 max-w-3xl text-sm leading-8 text-[color:var(--text-soft)]">
-              Every run stays tied to a session id, message history, and recommendation trace so the demo can resume
-              exactly where the agent left off.
+              Every search stays tied to a session id, message history, and recommendation trace so you can resume
+              exactly where you left off.
             </p>
           </div>
 
@@ -187,8 +187,7 @@ export default function HistoryPage() {
                 Empty archive
               </div>
               <p className="mt-4 text-sm leading-7 text-[color:var(--text-soft)]">
-                No sessions are stored yet. Run a supplements query from the landing page to create the first tracked
-                session.
+                No sessions are stored yet. Start a search from the landing page to create your first tracked session.
               </p>
             </div>
           ) : null}

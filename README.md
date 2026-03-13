@@ -1,46 +1,31 @@
 # AgentCart
 
-AgentCart is a session-bound shopping agent for hackathon demos where trust matters more than raw search speed.
+AgentCart is a session-based shopping assistant web app. Users can sign in, describe buying constraints, get ranked candidates, and keep the full decision trail in one place.
 
-This build is optimized for supplements and whey protein:
-- DB-first evidence reuse before fresh crawl
-- structured reasoning timeline instead of opaque output
-- ingredient scoring with beneficial signals and red flags
-- session history, product detail, charts, and evidence references in the UI
-- dark/light theme support
+## Core capabilities
+
+- Session-bound chat and follow-up workflow
+- Constraint-aware candidate ranking (budget, rating, delivery preference)
+- Product shortlist and product analysis pages
+- Explainable scoring with trace timeline and evidence tables
+- History page to reopen prior sessions
+- Light and dark theme support
 
 ## Stack
 
 - Frontend: Next.js 15, React 19, Tailwind CSS 4, Recharts
-- Backend: FastAPI, LangGraph orchestration, SQLite memory/evidence cache, Redis checkpoints
-- Auth: Cognito on the frontend, token passthrough on the backend
-
-## Core demo flow
-
-1. User logs in with Cognito.
-2. Frontend creates a session with `POST /v1/sessions`.
-3. User prompt goes to `POST /v1/chat`.
-4. Backend checks cached evidence first, then collects only when coverage is insufficient.
-5. Coverage auditor checks cache + catalog before crawl.
-6. UI renders:
-   - verdict and trust score
-   - scientific score radar, source-mix chart, and ABSA chart
-   - structured trace timeline and ranked evidence table
-   - shortlist of products from session state
-   - product detail with ingredient charts and source links
-7. Follow-up questions continue in the same session with `POST /v1/runs/{session_id}/resume`.
+- Backend: FastAPI, LangGraph orchestration, SQLite evidence store, Redis checkpoints
+- Auth: Amazon Cognito (frontend hosted flow + bearer token to API)
 
 ## Repository layout
 
-- `frontend/`: Next.js app
-- `backend/`: FastAPI app, agent orchestration, tests
-- `docs/`: demo script and submission checklist
+- `frontend/`: Next.js application
+- `backend/`: FastAPI services, agents, collectors, tests, scripts
+- `docs/`: operational runbooks and release checklists
 
-## Local setup
+## Environment setup
 
-### 1. Environment
-
-Use one root `.env` as the single source of truth for both backend and frontend:
+Use a single root `.env` file:
 
 ```env
 MOCK_MODEL=true
@@ -57,17 +42,16 @@ NEXT_PUBLIC_USE_COGNITO_HOSTED_LOGOUT=false
 # NEXT_PUBLIC_COGNITO_LOGOUT_URI=http://localhost:3000
 ```
 
-Important:
-- `NEXT_PUBLIC_*` values are consumed by the frontend.
-- Frontend now falls back to `../.env` when running from `frontend/`, so `frontend/.env.local` is optional.
-- Backend now falls back to root `.env` when running from `backend/`, so `backend/.env` is optional.
-- Hosted Cognito logout is opt-in and requires both `NEXT_PUBLIC_USE_COGNITO_HOSTED_LOGOUT=true` and `NEXT_PUBLIC_COGNITO_LOGOUT_URI`.
-- `AGENT_CORS_ALLOW_ORIGINS` must include the frontend origin or browser preflight will fail.
-- `AGENT_REQUIRE_AUTH=true` enforces strict bearer auth for `/v1/*`.
-- `MOCK_MODEL=true` is the easiest local demo mode.
-- If Redis is unavailable, backend falls back to in-memory checkpoints.
+Notes:
 
-### 2. Run backend
+- `NEXT_PUBLIC_*` variables are required by the frontend bundle.
+- Frontend and backend both fall back to root `.env`, so local per-folder env files are optional.
+- If you enable hosted Cognito logout, set both `NEXT_PUBLIC_USE_COGNITO_HOSTED_LOGOUT=true` and `NEXT_PUBLIC_COGNITO_LOGOUT_URI`.
+- `AGENT_CORS_ALLOW_ORIGINS` must include frontend origin to pass browser preflight.
+
+## Run locally
+
+### 1) Backend
 
 ```bash
 python -m venv .venv
@@ -82,10 +66,11 @@ uvicorn app.main:app --reload
 ```
 
 Backend URLs:
+
 - API: `http://localhost:8000`
 - Health: `http://localhost:8000/health`
 
-### 3. Run frontend
+### 2) Frontend
 
 ```bash
 cd frontend
@@ -94,36 +79,31 @@ npm run dev
 ```
 
 Frontend URL:
+
 - App: `http://localhost:3000`
 
-### 4. Warm up catalog (optional but recommended before demo)
+### 3) Optional catalog warmup
 
 ```bash
 cd backend
-python scripts/warmup_supplements_catalog.py --target 100
+python scripts/warmup_supplements_catalog.py --target 1600
 ```
 
-This seeds DB-first catalog records used by the coverage auditor before live crawl.
+This preloads catalog records for faster first-query behavior in local development.
 
-## Docker compose
-
-Run the full stack:
+## Docker
 
 ```bash
 docker compose up --build
 ```
 
-This starts:
+Services:
+
 - `frontend` at `http://localhost:3000`
 - `backend` at `http://localhost:8000`
 - `redis` at `redis://localhost:6379`
 
-Notes:
-- `NEXT_PUBLIC_*` values are passed into the frontend image at build time.
-- `backend/data` is mounted for SQLite persistence.
-- The backend CORS allowlist defaults to localhost frontend origins.
-
-## API surface used by the UI
+## API endpoints used by frontend
 
 - `POST /v1/sessions`
 - `GET /v1/sessions?limit=&cursor=`
@@ -133,10 +113,10 @@ Notes:
 - `POST /v1/runs/{session_id}/resume`
 - `GET /v1/recommendations/{session_id}`
 - `GET /v1/metrics/runtime`
-- `POST /v1/voice/consult`
 - `GET /v1/metrics/catalog`
+- `POST /v1/voice/consult`
 
-## Testing
+## Quality checks
 
 Backend:
 
@@ -145,30 +125,10 @@ cd backend
 pytest -q
 ```
 
-Frontend production check:
+Frontend:
 
 ```bash
 cd frontend
+npm run lint
 npm run build
 ```
-
-## Demo references
-
-- Demo runbook: `docs/demo_runbook.md`
-- Submission checklist: `docs/submission_checklist.md`
-
-## Suggested judge demo
-
-Use a prompt like:
-
-```text
-Find a whey isolate under $90 with third-party testing, low lactose, and no sucralose.
-```
-
-Then show:
-- landing page auth/session state and theme toggle
-- session-bound chat history
-- shortlist cards on `/results`
-- trace panel, trust radar, source mix, and evidence ledger
-- product detail charts and ingredient flags
-- evidence reference links

@@ -1,47 +1,45 @@
-# Submission Checklist - AgentCart
+# Release Checklist - AgentCart
 
 ## Product checks
 
-- [ ] Landing page login and search flow work on `http://localhost:3000`
-- [ ] `/results` creates a session and loads recommendation data from the API
-- [ ] Sidebar follow-up chat resumes the same session
+- [ ] Landing login and search flow work on `http://localhost:3000`
+- [ ] `/results` creates and loads session data from API
+- [ ] Follow-up chat continues in the same session
 - [ ] `/history` reopens prior sessions from `GET /v1/sessions`
-- [ ] `/product/[id]` renders ingredient analysis, charts, and source references
-- [ ] Dark mode and light mode both render correctly on desktop and mobile
-- [ ] Browser preflight to `POST /v1/sessions` succeeds from the frontend origin
-- [ ] No guest-mode path is shown in the main flow
+- [ ] `/product/[id]` renders analysis, charts, and source links
+- [ ] Light and dark mode both render correctly on desktop/mobile
+- [ ] Browser preflight to API endpoints succeeds from frontend origin
+- [ ] No guest-mode path in primary flow
 
 ## Backend checks
 
-- [ ] `POST /v1/sessions` works
-- [ ] `OPTIONS /v1/sessions` returns the expected CORS headers
-- [ ] `POST /v1/chat` works
-- [ ] `POST /v1/runs/{session_id}/resume` works
-- [ ] `GET /v1/sessions/{session_id}` works
-- [ ] `GET /v1/sessions/{session_id}/products` works
-- [ ] `GET /v1/recommendations/{session_id}` returns decision payload
-- [ ] `GET /v1/metrics/catalog` returns source counts and freshness
+- [ ] `POST /v1/sessions`
+- [ ] `OPTIONS /v1/sessions` returns expected CORS headers
+- [ ] `POST /v1/chat`
+- [ ] `POST /v1/runs/{session_id}/resume`
+- [ ] `GET /v1/sessions/{session_id}`
+- [ ] `GET /v1/sessions/{session_id}/products`
+- [ ] `GET /v1/recommendations/{session_id}`
+- [ ] `GET /v1/metrics/catalog`
 - [ ] `pytest -q` passes
 
 ## Explainability checks
 
 - [ ] Trace timeline is visible in results or product detail
 - [ ] Trust score dimensions are visible
-- [ ] Ingredient red flags and beneficial signals are visible
-- [ ] Source links are clickable from the UI
-- [ ] The demo explains DB-first evidence reuse before fresh crawling
-- [ ] Chat messages show expandable structured reasoning block (no raw CoT)
+- [ ] Product signals and risk flags are visible
+- [ ] Source links are clickable
+- [ ] Chat messages expose expandable structured reasoning (no raw CoT)
 
 ## Safety checks
 
 - [ ] No payment action is executed
-- [ ] Risk flags or blockers are shown when evidence is weak
-- [ ] `NEED_DATA` path can be resumed safely from the same session
+- [ ] Risk flags/blockers appear when confidence is low
+- [ ] `NEED_DATA` path resumes safely in the same session
 
-## Demo package
+## Delivery checks
 
-- [ ] README matches the current architecture
-- [ ] Docker compose starts frontend, backend, and Redis
-- [ ] Warmup script seeds target supplements records before demo
-- [ ] Demo script uses the whey / supplements lane
-- [ ] Judge walkthrough includes one normal path and one cautious fallback path
+- [ ] README reflects current architecture and setup
+- [ ] Docker compose starts frontend, backend, and redis
+- [ ] Warmup script can seed target catalog volume
+- [ ] End-to-end flow runs without manual state resets

@@ -13,7 +13,6 @@ import {
   ExternalLink,
   LoaderCircle,
   Send,
-  ShieldCheck,
   Sparkles,
   User,
 } from "lucide-react";
@@ -119,11 +118,6 @@ function tierLabel(tier: string | null | undefined) {
   if (normalized === "soft_10") return "soft +10%";
   if (normalized === "soft_15") return "soft +15%";
   return "strict";
-}
-
-function isKnownValue(value: string | null | undefined) {
-  const normalized = (value || "").trim().toLowerCase();
-  return normalized.length > 0 && normalized !== "unknown" && normalized !== "n/a";
 }
 
 function evidenceSentiment(excerpt: string) {
@@ -251,15 +245,6 @@ function ResultsContent() {
   const [optimisticMessages, setOptimisticMessages] = useState<RenderMessage[]>([]);
   const [thinkingStageIndex, setThinkingStageIndex] = useState(0);
   const bootKeyRef = useRef<string | null>(null);
-  const chatScrollRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const node = chatScrollRef.current;
-    if (!node) {
-      return;
-    }
-    node.scrollTop = node.scrollHeight;
-  }, [snapshot?.messages, optimisticMessages, sending]);
 
   useEffect(() => {
     if (!sending) {
@@ -376,7 +361,7 @@ function ResultsContent() {
 
   const currentPrompt = useMemo(() => {
     const firstUserMessage = snapshot?.messages.find((message) => message.role === "user");
-    return firstUserMessage?.content || query || "Supplements screening session";
+    return firstUserMessage?.content || query || "Shopping analysis session";
   }, [query, snapshot?.messages]);
 
   const needsFollowUp =
@@ -633,6 +618,86 @@ function ResultsContent() {
               </div>
             </div>
 
+            <div className="mt-8 rounded-[1.9rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-5">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Recommendation</p>
+                <span className="rounded-full border border-emerald-500/35 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-700 dark:text-emerald-300">
+                  Best current match
+                </span>
+              </div>
+              {selectedProduct ? (
+                <div className="mt-4 grid gap-4 md:grid-cols-[10rem_minmax(0,1fr)_12rem]">
+                  <div className="relative h-40 overflow-hidden rounded-[1.3rem] border border-[color:var(--border)] bg-[color:var(--surface-muted)]">
+                    {typeof selectedProduct.imageUrl === "string" && selectedProduct.imageUrl.startsWith("http") ? (
+                      <Image src={selectedProduct.imageUrl} alt={selectedProduct.title} fill className="object-cover" />
+                    ) : (
+                      <div className="flex h-full items-center justify-center text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                        No image
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">{selectedProduct.storeName}</p>
+                    <h3 className="mt-2 line-clamp-2 text-xl font-semibold leading-8 text-[color:var(--text-strong)]">
+                      {selectedProduct.title}
+                    </h3>
+                    <p className="mt-2 line-clamp-2 text-sm leading-6 text-[color:var(--text-soft)]">
+                      {selectedProduct.ingredientAnalysis.summary}
+                    </p>
+                    <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-[color:var(--text-soft)]">
+                      <span className="text-lg font-semibold text-[color:var(--text-strong)]">
+                        ${selectedProduct.price.toFixed(2)}
+                      </span>
+                      <span>{formatRating(selectedProduct.rating)} stars</span>
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-xs ${
+                          selectedProduct.constraintRelaxed
+                            ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                            : "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                        }`}
+                      >
+                        {tierLabel(selectedProduct.constraintTier)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="grid gap-3">
+                    <div className="rounded-[1.2rem] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3">
+                      <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Ingredient score</p>
+                      <p className={`mt-2 text-2xl font-semibold ${scoreTone(selectedProduct.ingredientAnalysis.score)}`}>
+                        {selectedProduct.ingredientAnalysis.score}
+                      </p>
+                    </div>
+                    <ul className="space-y-2 text-xs leading-6 text-[color:var(--text-soft)]">
+                      {selectedProduct.ingredientAnalysis.beneficialSignals.slice(0, 2).map((signal, index) => (
+                        <li key={`${signal.ingredient}-${signal.note}`} className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
+                          +{ingredientDelta(index, "good")} {signal.ingredient}
+                        </li>
+                      ))}
+                      {selectedProduct.ingredientAnalysis.redFlags.slice(0, 1).map((signal, index) => (
+                        <li
+                          key={`${signal.ingredient}-${signal.note}`}
+                          className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-rose-700 dark:text-rose-300"
+                        >
+                          -{ingredientDelta(index, "risk")} risk: {signal.ingredient}
+                        </li>
+                      ))}
+                    </ul>
+                    <Link
+                      href={`/product/${selectedProduct.productId}?session=${activeSessionId}`}
+                      className="inline-flex items-center justify-center gap-2 rounded-full border border-[color:var(--border)] px-4 py-2 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
+                    >
+                      Full analysis
+                      <ChevronRight className="h-4 w-4" />
+                    </Link>
+                  </div>
+                </div>
+              ) : (
+                <p className="mt-4 text-sm leading-7 text-[color:var(--text-soft)]">
+                  No candidate products are available yet for this session.
+                </p>
+              )}
+            </div>
+
             <div className="mx-auto mt-8 w-full max-w-5xl">
               <div className="mb-4 flex items-center justify-between gap-3">
                 <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Immediate shortlist</p>
@@ -641,18 +706,24 @@ function ResultsContent() {
                 </span>
               </div>
               {topProducts.length ? (
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-2">
+                <div className="overflow-x-auto pb-2">
+                  <div className="flex min-w-max gap-4">
                   {topProducts.map((product) => {
                     const imageUrl =
                       typeof product.imageUrl === "string" && product.imageUrl.startsWith("http")
                         ? product.imageUrl
                         : null;
+                    const isTopPick = selectedProduct?.productId === product.productId;
                     return (
                       <article
                         key={product.productId}
-                        className="overflow-hidden rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)]"
+                        className={`w-[250px] overflow-hidden rounded-[1.6rem] border bg-[color:var(--surface-strong)] ${
+                          isTopPick
+                            ? "border-[color:var(--accent)] shadow-[0_12px_24px_rgba(0,0,0,0.08)]"
+                            : "border-[color:var(--border)]"
+                        }`}
                       >
-                        <div className="relative h-44 w-full bg-[color:var(--surface-muted)]">
+                        <div className="relative h-36 w-full bg-[color:var(--surface-muted)]">
                           {imageUrl ? (
                             <Image src={imageUrl} alt={product.title} fill className="object-cover" />
                           ) : (
@@ -660,21 +731,26 @@ function ResultsContent() {
                               No image
                             </div>
                           )}
+                          {isTopPick ? (
+                            <span className="absolute left-3 top-3 rounded-full bg-[color:var(--text-strong)] px-2 py-1 text-[10px] uppercase tracking-[0.12em] text-[color:var(--background)]">
+                              Top pick
+                            </span>
+                          ) : null}
                         </div>
                         <div className="space-y-3 p-4">
-                          <p className="text-xs uppercase tracking-[0.22em] text-[color:var(--text-muted)]">
+                          <p className="text-[11px] uppercase tracking-[0.22em] text-[color:var(--text-muted)]">
                             {product.storeName}
                           </p>
-                          <h3 className="line-clamp-2 text-lg font-semibold leading-7 text-[color:var(--text-strong)]">
+                          <h3 className="line-clamp-2 text-base font-semibold leading-6 text-[color:var(--text-strong)]">
                             {product.title}
                           </h3>
-                          <div className="flex flex-wrap items-center gap-3 text-sm text-[color:var(--text-soft)]">
-                            <span className="font-semibold text-[color:var(--text-strong)]">
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-[color:var(--text-soft)]">
+                            <span className="text-sm font-semibold text-[color:var(--text-strong)]">
                               ${product.price.toFixed(2)}
                             </span>
                             <span>{formatRating(product.rating)} stars</span>
                             <span
-                              className={`rounded-full border px-2 py-0.5 text-xs ${
+                              className={`rounded-full border px-2 py-0.5 ${
                                 product.constraintRelaxed
                                   ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
                                   : "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
@@ -683,27 +759,23 @@ function ResultsContent() {
                               {tierLabel(product.constraintTier)}
                             </span>
                             {(product.offers?.length ?? 0) > 1 ? (
-                              <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-xs text-[color:var(--text-muted)]">
+                              <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[10px] text-[color:var(--text-muted)]">
                                 {product.offers?.length} offers
                               </span>
                             ) : null}
                           </div>
-                          {product.constraintRelaxed ? (
-                            <p className="text-xs text-amber-700 dark:text-amber-300">
-                              Constraint-relaxed: strict tier lacked enough candidates.
-                            </p>
-                          ) : null}
                           <Link
                             href={`/product/${product.productId}?session=${activeSessionId}`}
-                            className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-4 py-2 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
+                            className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-3 py-2 text-xs text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
                           >
                             Analyze product
-                            <ChevronRight className="h-4 w-4" />
+                            <ChevronRight className="h-3.5 w-3.5" />
                           </Link>
                         </div>
                       </article>
                     );
                   })}
+                  </div>
                 </div>
               ) : (
                 <div className="rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm text-[color:var(--text-soft)]">
@@ -713,83 +785,6 @@ function ResultsContent() {
             </div>
           </section>
 
-          <Panel eyebrow="Recommendation" title="Best current match">
-            {selectedProduct ? (
-              <div className="grid gap-5 lg:grid-cols-[1fr_0.9fr]">
-                <div className="rounded-[1.7rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-5">
-                  <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
-                    {selectedProduct.storeName}
-                  </p>
-                  <h3 className="mt-3 text-3xl font-semibold text-[color:var(--text-strong)]">
-                    {selectedProduct.title}
-                  </h3>
-                  <p className="mt-4 text-sm leading-7 text-[color:var(--text-soft)]">
-                    {selectedProduct.ingredientAnalysis.summary}
-                  </p>
-                  <div className="mt-5 flex flex-wrap items-center gap-4 text-sm text-[color:var(--text-soft)]">
-                    <span className="text-lg font-semibold text-[color:var(--text-strong)]">
-                      ${selectedProduct.price.toFixed(2)}
-                    </span>
-                    {isKnownValue(selectedProduct.shippingETA) ? <span>{selectedProduct.shippingETA}</span> : null}
-                    {isKnownValue(selectedProduct.returnPolicy) ? <span>{selectedProduct.returnPolicy}</span> : null}
-                    {selectedProduct.constraintRelaxed ? (
-                      <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs text-amber-700 dark:text-amber-300">
-                        {tierLabel(selectedProduct.constraintTier)}
-                      </span>
-                    ) : (
-                      <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-700 dark:text-emerald-300">
-                        strict
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div className="grid gap-4">
-                  <MetricCard
-                    label="Ingredient score"
-                    value={selectedProduct.ingredientAnalysis.score}
-                    tone={scoreTone(selectedProduct.ingredientAnalysis.score)}
-                  />
-                  <div className="rounded-[1.7rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-5">
-                    <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
-                      Checkout status
-                    </p>
-                    <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">
-                      <ShieldCheck className="h-4 w-4" />
-                      {selectedProduct.checkoutReady
-                        ? "Ready for checkout handoff"
-                        : "Needs extra checkout verification"}
-                    </div>
-                    <ul className="mt-3 space-y-2 text-xs leading-6 text-[color:var(--text-soft)]">
-                      {selectedProduct.ingredientAnalysis.beneficialSignals.slice(0, 2).map((signal, index) => (
-                        <li key={`${signal.ingredient}-${signal.note}`} className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
-                          • +{ingredientDelta(index, "good")} {signal.ingredient}
-                        </li>
-                      ))}
-                      {selectedProduct.ingredientAnalysis.redFlags.slice(0, 1).map((signal, index) => (
-                        <li
-                          key={`${signal.ingredient}-${signal.note}`}
-                          className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-rose-700 dark:text-rose-300"
-                        >
-                          • -{ingredientDelta(index, "risk")} risk: {signal.ingredient}
-                        </li>
-                      ))}
-                    </ul>
-                    <Link
-                      href={`/product/${selectedProduct.productId}?session=${activeSessionId}`}
-                      className="mt-4 inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-4 py-2 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
-                    >
-                      Full analysis
-                      <ChevronRight className="h-4 w-4" />
-                    </Link>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <p className="text-sm leading-7 text-[color:var(--text-soft)]">
-                No candidate products are available yet for this session.
-              </p>
-            )}
-          </Panel>
 
           <details className="group rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
             <summary className="cursor-pointer list-none">
@@ -986,7 +981,7 @@ function ResultsContent() {
               </p>
             </div>
           ) : null}
-          <div ref={chatScrollRef} className="mt-6 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain pr-1">
+          <div className="mt-6 flex flex-col gap-3">
             {messages.map((message, index) => {
               const isUser = message.role === "user";
               const meta =
@@ -1053,7 +1048,7 @@ function ResultsContent() {
                   void sendChatMessage();
                 }
               }}
-              placeholder={needsFollowUp ? "Example: prioritize grass-fed isolate with no sucralose." : "Example: keep only whey isolate options that are third-party tested."}
+              placeholder={needsFollowUp ? "Example: prioritize verified sellers with free returns." : "Example: keep only options with 4.5+ stars and delivery this week."}
               className="min-h-28 w-full rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm leading-7 text-[color:var(--text-strong)] outline-none transition placeholder:text-[color:var(--text-muted)] focus:border-[color:var(--accent)]"
             />
             <button type="button" onClick={() => void sendChatMessage()} disabled={!chatInput.trim() || sending || !activeSessionId} className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[color:var(--accent)] px-4 py-3 text-sm font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">

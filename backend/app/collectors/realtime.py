@@ -502,7 +502,7 @@ class DevRealtimeCollector:
             ),
             ReviewRecord(
                 source="tiktok",
-                url="https://www.tiktok.com/@demo/video/7450000000000000001",
+                url="https://www.tiktok.com/@wellness_lab/video/7450000000000000001",
                 review_id=f"tt-rv-{query_id}-1",
                 rating=4.0,
                 review_text=(
@@ -523,7 +523,7 @@ class DevRealtimeCollector:
             VisualRecord(
                 source="amazon",
                 url="https://www.amazon.com/dp/B0CMFQ7Y7Q",
-                image_url="https://images-na.ssl-images-amazon.com/images/I/demo-whey-tub.jpg",
+                image_url="https://images-na.ssl-images-amazon.com/images/I/whey-isolate-tub.jpg",
                 caption="Official label image showing whey isolate and nutrition panel.",
                 retrieved_at=now,
                 evidence_id=f"amz-img-{query_id}-1",
@@ -533,7 +533,7 @@ class DevRealtimeCollector:
             VisualRecord(
                 source="reddit",
                 url="https://www.reddit.com/r/Supplements/comments/xyz123/",
-                image_url="https://i.redd.it/demo-whey123.jpg",
+                image_url="https://i.redd.it/whey-product-compare.jpg",
                 caption="User photo comparing scoop size, ingredient label, and texture.",
                 retrieved_at=now,
                 evidence_id=f"rdt-img-{query_id}-1",
@@ -542,8 +542,8 @@ class DevRealtimeCollector:
             ),
             VisualRecord(
                 source="tiktok",
-                url="https://www.tiktok.com/@demo/video/7450000000000000001",
-                image_url="https://p16-sign-va.tiktokcdn.com/demo-chair-cover.jpeg",
+                url="https://www.tiktok.com/@wellness_lab/video/7450000000000000001",
+                image_url="https://p16-sign-va.tiktokcdn.com/product-review-cover.jpeg",
                 caption="TikTok video cover frame for product showcase.",
                 retrieved_at=now,
                 evidence_id=f"tt-img-{query_id}-1",

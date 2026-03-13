@@ -6,8 +6,6 @@ import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   BadgeCheck,
-  DatabaseZap,
-  FlaskConical,
   MoonStar,
   ShieldCheck,
   Sparkles,
@@ -20,15 +18,15 @@ import {
 } from "@/lib/auth";
 
 const presets = [
-  "Find whey isolate under $90, third-party tested, low lactose.",
-  "Compare creatine monohydrate options with no proprietary blends.",
-  "Recommend a protein powder with minimal artificial sweeteners.",
+  "Find an ergonomic office chair under $150 with 4+ stars and fast delivery.",
+  "Compare standing desks with cable management and a width above 55 inches.",
+  "Recommend a wireless headset with long battery life and low latency.",
 ];
 
 const valueRows = [
-  ["DB-first gate", "Reuse stored evidence before fresh crawl."],
-  ["Ingredient score", "Highlight beneficial compounds and red flags."],
-  ["Session memory", "Keep follow-ups and verdicts in one timeline."],
+  ["Multi-source matching", "Rank options from multiple stores with clear tradeoffs."],
+  ["Constraint-aware ranking", "Honor budget, quality, and delivery constraints first."],
+  ["Session continuity", "Keep follow-ups, shortlist updates, and history in one thread."],
 ];
 
 function LandingPage() {
@@ -91,31 +89,31 @@ function LandingPage() {
         <div className="animate-rise space-y-6">
           <div className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border-strong)] bg-[color:var(--surface-strong)] px-4 py-2 text-[11px] uppercase tracking-[0.32em] text-[color:var(--text-muted)]">
             <Sparkles className="h-3.5 w-3.5 text-[color:var(--accent)]" />
-            Supplements intelligence
+            Intelligent commerce
           </div>
 
           <div className="space-y-5">
             <h1 className="max-w-5xl text-5xl font-semibold leading-[0.92] tracking-[-0.05em] text-[color:var(--text-strong)] md:text-7xl">
-              Decision-grade supplement shopping.
+              Better buying decisions, one clean workspace.
             </h1>
             <p className="max-w-3xl text-base leading-8 text-[color:var(--text-soft)] md:text-lg">
-              One clean flow for trusted picks: evidence coverage, ingredient quality, source links, and session memory.
+              Search, compare, and refine products with transparent scoring, live follow-ups, and reusable session memory.
             </p>
           </div>
 
           <div className="grid gap-4 md:grid-cols-3">
             <div className="rounded-[1.8rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-5 shadow-[var(--shadow-soft)]">
-              <DatabaseZap className="h-5 w-5 text-[color:var(--accent)]" />
-              <p className="mt-4 text-sm font-medium text-[color:var(--text-strong)]">DB-first evidence gate</p>
+              <Sparkles className="h-5 w-5 text-[color:var(--accent)]" />
+              <p className="mt-4 text-sm font-medium text-[color:var(--text-strong)]">Constraint-first ranking</p>
               <p className="mt-2 text-sm leading-6 text-[color:var(--text-soft)]">
-                Stored evidence is checked first, then crawl expands only when coverage is weak.
+                The shortlist prioritizes your budget, quality targets, and delivery constraints before fallback tiers.
               </p>
             </div>
             <div className="rounded-[1.8rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-5 shadow-[var(--shadow-soft)]">
-              <FlaskConical className="h-5 w-5 text-[color:var(--accent)]" />
-              <p className="mt-4 text-sm font-medium text-[color:var(--text-strong)]">Ingredient intelligence</p>
+              <BadgeCheck className="h-5 w-5 text-[color:var(--accent)]" />
+              <p className="mt-4 text-sm font-medium text-[color:var(--text-strong)]">Trust diagnostics</p>
               <p className="mt-2 text-sm leading-6 text-[color:var(--text-soft)]">
-                Products surface protein source, ingredient flags, and reference links.
+                Every recommendation includes explainable factors, rating confidence, and source references.
               </p>
             </div>
             <div className="rounded-[1.8rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-5 shadow-[var(--shadow-soft)]">
@@ -163,7 +161,7 @@ function LandingPage() {
                   handleSubmit(query);
                 }
               }}
-              placeholder="Whey isolate under $90, third-party tested, low lactose, and delivered by Friday."
+              placeholder="Ergonomic chair under $150, 4+ stars, and delivered by Friday."
               className="min-h-40 w-full rounded-[1.9rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-5 py-4 text-base leading-7 text-[color:var(--text-strong)] outline-none transition placeholder:text-[color:var(--text-muted)] focus:border-[color:var(--accent)]"
             />
 
@@ -224,23 +222,22 @@ function LandingPage() {
         <div className="rounded-[2.2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
           <div className="flex items-center gap-2 text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">
             <BadgeCheck className="h-3.5 w-3.5 text-[color:var(--accent)]" />
-            Product lane
+            Product workspace
           </div>
           <h2 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-[color:var(--text-strong)]">
-            Supplements-first, production-ready.
+            Built for daily shopping workflows.
           </h2>
           <p className="mt-4 text-sm leading-7 text-[color:var(--text-soft)]">
-            Whey and supplement workflows are optimized for ingredient scrutiny, trustworthy scoring, and explainable
-            evidence diagnostics.
+            Use one session to collect constraints, compare candidates, and keep decisions auditable from first query to final pick.
           </p>
         </div>
 
         <div className="rounded-[2.2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
           <div className="mb-5 flex items-center justify-between gap-3">
             <div>
-              <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Why it stands out</p>
+              <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Why it works</p>
               <h2 className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-[color:var(--text-strong)]">
-                Evidence system view
+                Clear decision system
               </h2>
             </div>
             <span className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--text-muted)]">3 signals</span>
@@ -249,7 +246,7 @@ function LandingPage() {
           <div className="overflow-hidden rounded-[1.7rem] border border-[color:var(--border)]">
             <div className="grid grid-cols-[minmax(0,0.36fr)_1fr] bg-[color:var(--surface-strong)] px-4 py-3 text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
               <span>Layer</span>
-              <span>What the judge sees</span>
+              <span>What you get</span>
             </div>
             {valueRows.map(([label, detail], index) => (
               <div

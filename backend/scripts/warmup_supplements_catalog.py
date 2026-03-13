@@ -308,7 +308,7 @@ async def warmup_catalog(target_records: int) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Warm up supplements catalog for DB-first coverage before demo.",
+        description="Warm up catalog records for local search coverage.",
     )
     parser.add_argument(
         "--target",

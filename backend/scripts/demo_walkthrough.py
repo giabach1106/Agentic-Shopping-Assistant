@@ -7,7 +7,7 @@ import httpx
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run end-to-end demo walkthrough.")
+    parser = argparse.ArgumentParser(description="Run end-to-end API walkthrough.")
     parser.add_argument(
         "--base-url",
         default="http://127.0.0.1:8000",
