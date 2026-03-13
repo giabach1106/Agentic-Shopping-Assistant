@@ -125,6 +125,59 @@ def test_trust_scoring_returns_avoid_for_severe_review_risk() -> None:
     assert any("possible manipulation" in flag.lower() for flag in result.decision.risk_flags)
 
 
+def test_trust_scoring_prefers_wait_when_shortlist_exists_but_rating_coverage_is_thin() -> None:
+    engine = TrustScoringEngine(_settings())
+    result = engine.evaluate(
+        agent_outputs={
+            "collect": {
+                "sourceCoverage": 4,
+                "commerceSourceCoverage": 1,
+                "ratedCandidateCount": 2,
+                "ratedCoverageRatio": 0.2,
+            },
+            "review": {
+                "confidence": 0.62,
+                "paidPromoLikelihood": 0.45,
+                "evidenceQualityScore": 0.58,
+                "duplicateReviewClusters": [],
+                "riskFlags": [],
+                "absaSignals": {
+                    "digestibility": 0.2,
+                    "mixability": 0.1,
+                    "taste": 0.0,
+                    "ingredientQuality": 0.2,
+                    "priceValue": 0.1,
+                    "delivery": 0.0,
+                },
+                "reviewCount": 30,
+                "ratingSummary": {
+                    "avgRating": 3.8,
+                    "ratingCount": 300,
+                    "positiveCount": 140,
+                },
+            },
+            "visual": {
+                "status": "OK",
+                "authenticityScore": 76,
+                "confidence": 0.7,
+                "mismatchFlags": [],
+                "visualRisks": [],
+            },
+            "price": {
+                "candidates": [
+                    {"title": f"candidate-{idx}", "sourceUrl": f"https://example.com/p/{idx}"}
+                    for idx in range(8)
+                ],
+                "blockers": [],
+            },
+        },
+        constraints={"budgetMax": 120, "deliveryDeadline": "friday"},
+    )
+    assert result.status == "OK"
+    assert result.decision is not None
+    assert result.decision.verdict == "WAIT"
+
+
 def test_trust_scoring_penalizes_missing_visual_evidence() -> None:
     engine = TrustScoringEngine(_settings())
     result = engine.evaluate(
