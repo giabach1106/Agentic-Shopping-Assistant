@@ -6,10 +6,8 @@ import type {
   SessionProductsResponse,
   SessionSnapshotResponse,
 } from "@/lib/contracts";
+import { getRuntimeConfigValue } from "@/lib/runtime-config";
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "") ||
-  "http://localhost:8000";
 const SESSION_KEY = "agentcart.active_session";
 export const SESSION_EVENT_NAME = "agentcart:session";
 
@@ -29,6 +27,9 @@ async function request<T>(
   path: string,
   init: RequestInit & { bodyJson?: JsonBody } = {}
 ): Promise<T> {
+  const apiBaseUrl =
+    getRuntimeConfigValue("NEXT_PUBLIC_API_BASE_URL")?.replace(/\/+$/, "") ||
+    "http://localhost:8000";
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
 
@@ -45,14 +46,14 @@ async function request<T>(
 
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    response = await fetch(`${apiBaseUrl}${path}`, {
       ...init,
       headers,
       body: init.bodyJson ? JSON.stringify(init.bodyJson) : init.body,
     });
   } catch (error) {
     throw new Error(
-      `Failed to reach API at ${API_BASE_URL}. Check that the backend is running and CORS allows the frontend origin.`
+      `Failed to reach API at ${apiBaseUrl}. Check that the backend is running and CORS allows the frontend origin.`
     );
   }
 

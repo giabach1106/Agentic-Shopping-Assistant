@@ -38,6 +38,7 @@ def test_settings(tmp_path: Path) -> Settings:
         estimated_cost_per_call_pro_usd=0.01,
         estimated_cost_per_call_lite_usd=0.004,
         cors_allow_origins=("http://localhost:3000", "http://127.0.0.1:3000"),
+        verify_jwt_signature=False,
     )
 
 

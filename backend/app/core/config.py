@@ -81,6 +81,10 @@ class Settings:
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     )
+    cognito_region: str | None = None
+    cognito_user_pool_id: str | None = None
+    cognito_app_client_id: str | None = None
+    verify_jwt_signature: bool = True
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -148,5 +152,12 @@ class Settings:
             cors_allow_origins=_as_csv_tuple(
                 os.getenv("AGENT_CORS_ALLOW_ORIGINS") or os.getenv("CORS_ORIGINS"),
                 default=("http://localhost:3000", "http://127.0.0.1:3000"),
+            ),
+            cognito_region=os.getenv("COGNITO_REGION"),
+            cognito_user_pool_id=os.getenv("COGNITO_USER_POOL_ID"),
+            cognito_app_client_id=os.getenv("COGNITO_APP_CLIENT_ID"),
+            verify_jwt_signature=_as_bool(
+                os.getenv("AGENT_VERIFY_JWT_SIGNATURE"),
+                default=True,
             ),
         )

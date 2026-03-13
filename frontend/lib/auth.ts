@@ -1,3 +1,5 @@
+import { getRuntimeConfigValue } from "@/lib/runtime-config";
+
 const ID_TOKEN_KEY = "agentcart.id_token";
 const ACCESS_TOKEN_KEY = "agentcart.access_token";
 const THEME_KEY = "agentcart.theme";
@@ -12,10 +14,10 @@ export interface TokenClaims {
 }
 
 function getCognitoConfig() {
-  const domain = process.env.NEXT_PUBLIC_COGNITO_DOMAIN?.trim();
-  const clientId = process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID?.trim();
-  const redirectUri = process.env.NEXT_PUBLIC_COGNITO_REDIRECT_URI?.trim();
-  const logoutUri = process.env.NEXT_PUBLIC_COGNITO_LOGOUT_URI?.trim();
+  const domain = getRuntimeConfigValue("NEXT_PUBLIC_COGNITO_DOMAIN");
+  const clientId = getRuntimeConfigValue("NEXT_PUBLIC_COGNITO_CLIENT_ID");
+  const redirectUri = getRuntimeConfigValue("NEXT_PUBLIC_COGNITO_REDIRECT_URI");
+  const logoutUri = getRuntimeConfigValue("NEXT_PUBLIC_COGNITO_LOGOUT_URI");
 
   if (!domain || !clientId || !redirectUri) {
     return null;
@@ -26,13 +28,13 @@ function getCognitoConfig() {
 
 export function getAuthConfigurationError() {
   const missing: string[] = [];
-  if (!process.env.NEXT_PUBLIC_COGNITO_DOMAIN?.trim()) {
+  if (!getRuntimeConfigValue("NEXT_PUBLIC_COGNITO_DOMAIN")) {
     missing.push("NEXT_PUBLIC_COGNITO_DOMAIN");
   }
-  if (!process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID?.trim()) {
+  if (!getRuntimeConfigValue("NEXT_PUBLIC_COGNITO_CLIENT_ID")) {
     missing.push("NEXT_PUBLIC_COGNITO_CLIENT_ID");
   }
-  if (!process.env.NEXT_PUBLIC_COGNITO_REDIRECT_URI?.trim()) {
+  if (!getRuntimeConfigValue("NEXT_PUBLIC_COGNITO_REDIRECT_URI")) {
     missing.push("NEXT_PUBLIC_COGNITO_REDIRECT_URI");
   }
   if (!missing.length) {
@@ -174,10 +176,10 @@ export function tryBuildAuthorizeUrl() {
 }
 
 export function tryLogoutUrl() {
-  if (process.env.NEXT_PUBLIC_USE_COGNITO_HOSTED_LOGOUT?.trim() !== "true") {
+  if (getRuntimeConfigValue("NEXT_PUBLIC_USE_COGNITO_HOSTED_LOGOUT") !== "true") {
     return null;
   }
-  if (!process.env.NEXT_PUBLIC_COGNITO_LOGOUT_URI?.trim()) {
+  if (!getRuntimeConfigValue("NEXT_PUBLIC_COGNITO_LOGOUT_URI")) {
     return null;
   }
   return getCognitoConfig() ? logoutUrl() : null;

@@ -58,6 +58,6 @@ npm run start
 
 - Main flow is strict-auth (`/v1/*` requires token).
 - Missing Cognito env values surface explicit setup errors.
-- `NEXT_PUBLIC_*` values must be present at Docker build time.
+- `NEXT_PUBLIC_*` values are loaded at container startup from runtime env (`public/runtime-config.js`).
 - Frontend falls back to root `.env`, so `frontend/.env.local` is optional.
 - Hosted logout only works if both `NEXT_PUBLIC_USE_COGNITO_HOSTED_LOGOUT=true` and `NEXT_PUBLIC_COGNITO_LOGOUT_URI` are set.

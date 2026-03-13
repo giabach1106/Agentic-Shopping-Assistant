@@ -1,0 +1,1 @@
+window.__AGENTCART_RUNTIME_CONFIG__ = window.__AGENTCART_RUNTIME_CONFIG__ || {};

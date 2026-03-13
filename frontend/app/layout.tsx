@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
+import Script from "next/script";
 
 import "@/app/globals.css";
 import { Footer } from "@/components/layout/Footer";
@@ -37,6 +38,7 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${sans.variable} ${mono.variable}`} suppressHydrationWarning>
       <head>
+        <Script src="/runtime-config.js" strategy="beforeInteractive" />
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
       <body className="min-h-screen bg-[color:var(--background)] font-sans text-[color:var(--text-strong)] antialiased">

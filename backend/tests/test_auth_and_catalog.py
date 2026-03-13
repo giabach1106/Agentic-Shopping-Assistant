@@ -49,6 +49,19 @@ def test_missing_auth_is_rejected(tmp_path: Path) -> None:
     assert response.status_code == 401
 
 
+def test_auth_requires_cognito_config_when_signature_verification_is_on(
+    tmp_path: Path,
+) -> None:
+    app = create_app(_settings(tmp_path))
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/sessions",
+            headers={"Authorization": "Bearer test.test.test"},
+        )
+    assert response.status_code == 500
+    assert "COGNITO_REGION" in response.json().get("detail", "")
+
+
 def test_cors_preflight_sessions_endpoint(tmp_path: Path) -> None:
     app = create_app(_settings(tmp_path))
     with TestClient(app) as client:

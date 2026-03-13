@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import base64
 import html
 import re
 import hashlib
-import json
 import time
 from collections import defaultdict
 from typing import Any
@@ -29,6 +27,11 @@ from app.models.schemas import (
     VoiceConsultResponse,
 )
 from app.orchestrator.message_formatter import build_assistant_meta
+from app.services.token_auth import (
+    decode_claims_without_verification,
+    parse_bearer_token,
+    verify_cognito_token,
+)
 
 router = APIRouter()
 _COMMERCE_SOURCES = {"amazon", "ebay", "walmart", "nutritionfaktory", "dps"}
@@ -66,35 +69,46 @@ def _services(request: Request) -> ServiceContainer:
     return request.app.state.services
 
 
-def _decode_token_claims(authorization: str | None) -> dict[str, Any]:
-    if not authorization:
-        return {}
-    parts = authorization.split()
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        return {}
-    token = parts[1]
-    payload = token.split(".")
-    if len(payload) < 2:
-        return {}
-    encoded = payload[1] + "=" * (-len(payload[1]) % 4)
-    try:
-        decoded = base64.urlsafe_b64decode(encoded.encode("utf-8"))
-        loaded = json.loads(decoded.decode("utf-8"))
-    except (ValueError, json.JSONDecodeError):
-        return {}
-    return loaded if isinstance(loaded, dict) else {}
-
-
 def _require_token_claims(request: Request) -> dict[str, Any]:
     services = _services(request)
-    claims = _decode_token_claims(request.headers.get("Authorization"))
+    token = parse_bearer_token(request.headers.get("Authorization"))
     if not services.settings.require_auth:
-        return claims
-    if not claims:
+        if not token:
+            return {}
+        return decode_claims_without_verification(token)
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing or invalid bearer token.",
         )
+
+    if services.settings.verify_jwt_signature:
+        try:
+            claims = verify_cognito_token(
+                token,
+                region=services.settings.cognito_region,
+                user_pool_id=services.settings.cognito_user_pool_id,
+                app_client_id=services.settings.cognito_app_client_id,
+            )
+        except ValueError as exc:
+            detail = str(exc)
+            if detail.startswith("Auth is enabled but Cognito settings are incomplete"):
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=detail,
+                ) from exc
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Missing or invalid bearer token.",
+            ) from exc
+    else:
+        claims = decode_claims_without_verification(token)
+        if not claims:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Missing or invalid bearer token.",
+            )
+
     subject = str(claims.get("sub") or "").strip()
     if not subject:
         raise HTTPException(

@@ -2,8 +2,9 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -15,20 +16,18 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     restart: unless-stopped
-    ports:
-      - "8000:8000"
     env_file:
       - .env
     environment:
       AGENT_REDIS_URL: redis://redis:6379/0
       AGENT_SQLITE_PATH: /app/data/agent_memory.sqlite3
-      AGENT_CORS_ALLOW_ORIGINS: ${AGENT_CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
-      AGENT_REQUIRE_AUTH: ${AGENT_REQUIRE_AUTH:-true}
     volumes:
       - ./backend/data:/app/data
     depends_on:
       redis:
         condition: service_healthy
+    expose:
+      - "8000"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).read()\""]
       interval: 15s
@@ -40,26 +39,53 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
       args:
-        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-}
         NEXT_PUBLIC_COGNITO_DOMAIN: ${NEXT_PUBLIC_COGNITO_DOMAIN:-}
         NEXT_PUBLIC_COGNITO_CLIENT_ID: ${NEXT_PUBLIC_COGNITO_CLIENT_ID:-}
-        NEXT_PUBLIC_COGNITO_REDIRECT_URI: ${NEXT_PUBLIC_COGNITO_REDIRECT_URI:-http://localhost:3000}
-        REQUIRE_COGNITO_ENV: ${REQUIRE_COGNITO_ENV:-false}
+        NEXT_PUBLIC_COGNITO_REDIRECT_URI: ${NEXT_PUBLIC_COGNITO_REDIRECT_URI:-}
+        NEXT_PUBLIC_USE_COGNITO_HOSTED_LOGOUT: ${NEXT_PUBLIC_USE_COGNITO_HOSTED_LOGOUT:-false}
+        NEXT_PUBLIC_COGNITO_LOGOUT_URI: ${NEXT_PUBLIC_COGNITO_LOGOUT_URI:-}
+        REQUIRE_COGNITO_ENV: ${REQUIRE_COGNITO_ENV:-true}
     environment:
-      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-}
       NEXT_PUBLIC_COGNITO_DOMAIN: ${NEXT_PUBLIC_COGNITO_DOMAIN:-}
       NEXT_PUBLIC_COGNITO_CLIENT_ID: ${NEXT_PUBLIC_COGNITO_CLIENT_ID:-}
-      NEXT_PUBLIC_COGNITO_REDIRECT_URI: ${NEXT_PUBLIC_COGNITO_REDIRECT_URI:-http://localhost:3000}
+      NEXT_PUBLIC_COGNITO_REDIRECT_URI: ${NEXT_PUBLIC_COGNITO_REDIRECT_URI:-}
       NEXT_PUBLIC_USE_COGNITO_HOSTED_LOGOUT: ${NEXT_PUBLIC_USE_COGNITO_HOSTED_LOGOUT:-false}
       NEXT_PUBLIC_COGNITO_LOGOUT_URI: ${NEXT_PUBLIC_COGNITO_LOGOUT_URI:-}
     restart: unless-stopped
-    ports:
-      - "3000:3000"
     depends_on:
       backend:
         condition: service_healthy
+    expose:
+      - "3000"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000 > /dev/null"]
       interval: 15s
       timeout: 5s
       retries: 8
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      CADDY_ACME_EMAIL: ${CADDY_ACME_EMAIL:-}
+      CADDY_APP_DOMAIN: ${CADDY_APP_DOMAIN:-}
+      CADDY_API_DOMAIN: ${CADDY_API_DOMAIN:-}
+    volumes:
+      - ./deploy/ec2/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+volumes:
+  redis-data:
+  caddy-data:
+  caddy-config:
