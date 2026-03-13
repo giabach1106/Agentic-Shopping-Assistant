@@ -560,8 +560,8 @@ function ResultsContent() {
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-8 md:px-8 md:py-12">
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_25.5rem]">
-        <div className="min-w-0 space-y-8">
+      <div className="grid gap-6">
+        <div className="mx-auto min-w-0 w-full max-w-5xl space-y-8">
           <section className="rounded-[2.5rem] border border-[color:var(--border-strong)] bg-[color:var(--surface)] p-7 shadow-[var(--shadow-strong)]">
             <div className="flex flex-wrap items-center gap-3">
               <span className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-2 text-xs uppercase tracking-[0.3em] text-[color:var(--text-muted)]">
@@ -960,7 +960,7 @@ function ResultsContent() {
           </Link>
         </div>
 
-        <aside className="self-start flex flex-col rounded-[2.4rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
+        <aside className="mx-auto flex w-full max-w-5xl flex-col rounded-[2.4rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Live session</p>
