@@ -56,6 +56,7 @@ const emptyRatingSummary: RatingSummary = {
   positiveCount: 0,
   positiveRate: 0,
 };
+const COMMERCE_SOURCES = new Set(["amazon", "ebay", "walmart", "nutritionfaktory", "dps"]);
 
 function toCheckpointState(snapshot: SessionSnapshotResponse | null) {
   return (snapshot?.checkpointState as CheckpointStateShape | null) ?? null;
@@ -96,6 +97,7 @@ export function getReviewInsights(snapshot: SessionSnapshotResponse | null): Rev
             source,
             count: asNumber(count),
           }))
+          .filter((item) => COMMERCE_SOURCES.has(item.source.toLowerCase()))
           .sort((left, right) => right.count - left.count)
       : [];
 
@@ -125,10 +127,16 @@ export function getReviewInsights(snapshot: SessionSnapshotResponse | null): Rev
           }
 
           const entry = item as Record<string, unknown>;
+          const source = typeof entry.source === "string" ? entry.source : "unknown";
+          if (!COMMERCE_SOURCES.has(source.toLowerCase())) {
+            return null;
+          }
+          const rawQuality = asNumber(entry.qualityScore);
+          const qualityScore = rawQuality <= 1 ? Math.round(rawQuality * 100) : Math.round(rawQuality);
           return {
             docId: typeof entry.docId === "string" ? entry.docId : "unknown",
-            source: typeof entry.source === "string" ? entry.source : "unknown",
-            qualityScore: Math.round(asNumber(entry.qualityScore) * 100),
+            source,
+            qualityScore,
             promoSignals: asStringArray(entry.promoSignals),
             excerpt: typeof entry.excerpt === "string" ? entry.excerpt : "",
           };
@@ -180,6 +188,9 @@ export function buildReferenceLinks(
     ...new Set(
       [
         ...products.map((product) => product.sourceUrl),
+        ...products.flatMap((product) =>
+          (product.offers ?? []).map((offer) => offer.sourceUrl)
+        ),
         ...products.flatMap((product) => [
           ...product.evidenceRefs,
           ...product.ingredientAnalysis.references,

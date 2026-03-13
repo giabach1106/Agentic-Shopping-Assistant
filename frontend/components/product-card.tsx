@@ -14,6 +14,18 @@ function formatMoney(value: number) {
   }).format(value);
 }
 
+function formatRating(value: number | null) {
+  if (typeof value !== "number" || value <= 0) {
+    return "N/A";
+  }
+  return value.toFixed(1);
+}
+
+function isKnownValue(value: string | null | undefined) {
+  const normalized = (value || "").trim().toLowerCase();
+  return normalized.length > 0 && normalized !== "unknown" && normalized !== "n/a";
+}
+
 export function ProductCard({
   product,
   sessionId,
@@ -60,10 +72,10 @@ export function ProductCard({
           <span className="text-lg font-semibold text-[color:var(--text-strong)]">{formatMoney(product.price)}</span>
           <span className="inline-flex items-center gap-1">
             <Star className="h-4 w-4 fill-current text-amber-500" />
-            {product.rating ?? "n/a"}
+            {formatRating(product.rating)}
           </span>
-          <span>{product.shippingETA}</span>
-          <span>{product.returnPolicy}</span>
+          {isKnownValue(product.shippingETA) ? <span>{product.shippingETA}</span> : null}
+          {isKnownValue(product.returnPolicy) ? <span>{product.returnPolicy}</span> : null}
         </div>
 
         <p className="text-sm leading-6 text-[color:var(--text-soft)]">{product.ingredientAnalysis.summary}</p>
@@ -106,6 +118,11 @@ export function ProductCard({
         </div>
 
         <div className="mt-5 flex flex-col gap-3">
+          {(product.offers?.length ?? 0) > 1 ? (
+            <div className="inline-flex items-center justify-center rounded-full border border-[color:var(--border)] px-4 py-2 text-xs text-[color:var(--text-muted)]">
+              {(product.offers?.length ?? 0)} offers across {(product.sourceBreakdown?.length ?? 1)} sources
+            </div>
+          ) : null}
           <Link
             href={`/product/${product.productId}?session=${sessionId}`}
             className="inline-flex items-center justify-center gap-2 rounded-full bg-[color:var(--text-strong)] px-4 py-3 text-sm font-medium text-[color:var(--background)] transition hover:bg-[color:var(--accent)]"

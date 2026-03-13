@@ -109,6 +109,7 @@ export interface CandidateProduct {
 
 export interface SessionProduct {
   productId: string;
+  canonicalProductId?: string;
   title: string;
   storeName: string;
   source: string;
@@ -119,13 +120,53 @@ export interface SessionProduct {
   shippingETA: string;
   returnPolicy: string;
   checkoutReady: boolean;
+  constraintTier?: "strict" | "soft_5" | "soft_10" | "soft_15";
+  constraintRelaxed?: boolean;
   evidenceRefs: string[];
+  primaryOffer?: Offer;
+  offers?: Offer[];
+  sourceBreakdown?: SourceBreakdownItem[];
+  ratingCoverage?: RatingCoverage;
   pros: string[];
   cons: string[];
+  evidenceRows?: EvidenceRow[];
   ingredientAnalysis: IngredientAnalysis;
   scientificScore: ScientificScore;
   evidenceStats: EvidenceStats;
   trace: TraceEvent[];
+}
+
+export interface Offer {
+  source: string;
+  storeName: string;
+  sourceUrl: string;
+  price: number;
+  rating: number | null;
+  ratingCount: number;
+  shippingETA: string;
+  returnPolicy: string;
+  imageUrl?: string | null;
+}
+
+export interface SourceBreakdownItem {
+  source: string;
+  count: number;
+}
+
+export interface RatingCoverage {
+  ratedOfferCount: number;
+  totalOfferCount: number;
+}
+
+export interface EvidenceRow {
+  docId: string;
+  source: string;
+  qualityScore: number;
+  promoSignals: string[];
+  excerpt: string;
+  positiveSignals: string[];
+  negativeSignals: string[];
+  sentimentScore: number;
 }
 
 export interface SessionProductsResponse {

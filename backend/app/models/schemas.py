@@ -102,6 +102,17 @@ class RatingCoverageResponse(BaseModel):
     total_offer_count: int = Field(alias="totalOfferCount")
 
 
+class EvidenceRowResponse(BaseModel):
+    doc_id: str = Field(alias="docId")
+    source: str
+    quality_score: int = Field(alias="qualityScore")
+    promo_signals: list[str] = Field(alias="promoSignals")
+    excerpt: str
+    positive_signals: list[str] = Field(alias="positiveSignals")
+    negative_signals: list[str] = Field(alias="negativeSignals")
+    sentiment_score: int = Field(alias="sentimentScore")
+
+
 class SessionProductResponse(BaseModel):
     product_id: str = Field(alias="productId")
     canonical_product_id: str = Field(alias="canonicalProductId")
@@ -115,6 +126,8 @@ class SessionProductResponse(BaseModel):
     shipping_eta: str = Field(alias="shippingETA")
     return_policy: str = Field(alias="returnPolicy")
     checkout_ready: bool = Field(alias="checkoutReady")
+    constraint_tier: str = Field(alias="constraintTier")
+    constraint_relaxed: bool = Field(alias="constraintRelaxed")
     evidence_refs: list[str] = Field(alias="evidenceRefs")
     primary_offer: OfferResponse = Field(alias="primaryOffer")
     offers: list[OfferResponse]
@@ -122,6 +135,7 @@ class SessionProductResponse(BaseModel):
     rating_coverage: RatingCoverageResponse = Field(alias="ratingCoverage")
     pros: list[str]
     cons: list[str]
+    evidence_rows: list[EvidenceRowResponse] = Field(alias="evidenceRows")
     ingredient_analysis: IngredientAnalysisResponse = Field(alias="ingredientAnalysis")
     scientific_score: dict[str, Any] = Field(alias="scientificScore")
     evidence_stats: dict[str, Any] = Field(alias="evidenceStats")

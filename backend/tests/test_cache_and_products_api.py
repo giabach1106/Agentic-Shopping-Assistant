@@ -184,8 +184,17 @@ def test_session_products_endpoint_returns_ingredient_analysis(client: TestClien
     assert "offers" in first
     assert isinstance(first["offers"], list)
     assert len(first["offers"]) >= 1
+    assert first["constraintTier"] in {"strict", "soft_5", "soft_10", "soft_15"}
+    assert isinstance(first["constraintRelaxed"], bool)
     assert "ratingCoverage" in first
     assert first["ratingCoverage"]["totalOfferCount"] >= first["ratingCoverage"]["ratedOfferCount"]
+    assert "evidenceRows" in first
+    assert isinstance(first["evidenceRows"], list)
+    if first["evidenceRows"]:
+        row = first["evidenceRows"][0]
+        assert "positiveSignals" in row
+        assert "negativeSignals" in row
+        assert "sentimentScore" in row
     assert any(
         item["ingredient"] == "whey isolate"
         for product in payload["items"]

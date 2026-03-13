@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import html
 import re
 import hashlib
 import json
@@ -30,6 +31,35 @@ from app.models.schemas import (
 from app.orchestrator.message_formatter import build_assistant_meta
 
 router = APIRouter()
+_COMMERCE_SOURCES = {"amazon", "ebay", "walmart", "nutritionfaktory", "dps"}
+_POSITIVE_MARKERS = (
+    "third-party",
+    "third party",
+    "grass-fed",
+    "lactose free",
+    "low lactose",
+    "clean ingredient",
+    "great taste",
+    "mixes well",
+    "easy digest",
+    "good value",
+    "fast shipping",
+    "high quality",
+)
+_NEGATIVE_MARKERS = (
+    "fake",
+    "counterfeit",
+    "bad taste",
+    "chalky",
+    "bloated",
+    "clump",
+    "damaged",
+    "late delivery",
+    "high price",
+    "overpriced",
+    "sugar spike",
+    "stomach",
+)
 
 
 def _services(request: Request) -> ServiceContainer:
@@ -128,7 +158,7 @@ def _canonical_product_key(title: str, source_url: str) -> str:
 
 
 def _source_priority(source: str) -> int:
-    mapping = {"amazon": 0, "walmart": 1, "ebay": 2}
+    mapping = {"amazon": 0, "ebay": 1, "nutritionfaktory": 2, "dps": 3, "walmart": 4}
     return mapping.get(source.lower(), 99)
 
 
@@ -144,6 +174,135 @@ def _safe_int(value: Any, fallback: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return fallback
+
+
+def _safe_quality_score(value: Any) -> int:
+    numeric = _safe_float(value, 0.0)
+    if numeric <= 1:
+        return int(round(max(0.0, min(1.0, numeric)) * 100))
+    return int(round(max(0.0, min(100.0, numeric))))
+
+
+def _keyword_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in re.split(r"[^a-z0-9]+", value.lower())
+        if len(token) >= 4 and token not in {"with", "from", "protein", "powder", "whey"}
+    }
+
+
+def _source_host(url: str) -> str:
+    try:
+        return urlparse(url).netloc.lower().replace("www.", "").strip()
+    except ValueError:
+        return ""
+
+
+def _sentiment_markers(text: str) -> tuple[list[str], list[str], int]:
+    lowered = text.lower()
+    positive = [marker for marker in _POSITIVE_MARKERS if marker in lowered]
+    negative = [marker for marker in _NEGATIVE_MARKERS if marker in lowered]
+    score = len(positive) - len(negative)
+    return positive[:3], negative[:3], score
+
+
+def _build_product_evidence_rows(
+    review: dict[str, Any],
+    *,
+    product_title: str,
+    offers: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    ranked = review.get("rankedEvidence")
+    if not isinstance(ranked, list):
+        return []
+    keywords = _keyword_tokens(product_title)
+    offer_sources = {
+        str(offer.get("source") or "").strip().lower()
+        for offer in offers
+        if isinstance(offer, dict)
+    }
+    offer_hosts = {
+        _source_host(str(offer.get("sourceUrl") or ""))
+        for offer in offers
+        if isinstance(offer, dict)
+    }
+
+    scoped: list[dict[str, Any]] = []
+    for raw in ranked:
+        if not isinstance(raw, dict):
+            continue
+        source = str(raw.get("source") or "").strip().lower()
+        if source not in _COMMERCE_SOURCES:
+            continue
+        excerpt = html.unescape(str(raw.get("excerpt") or "")).strip()
+        doc_id = str(raw.get("docId") or "").strip()
+        haystack = f"{excerpt} {doc_id}".lower()
+        if keywords and not any(token in haystack for token in keywords):
+            continue
+        if offer_sources and source not in offer_sources:
+            continue
+        if offer_hosts:
+            doc_host = _source_host(doc_id) if doc_id.startswith("http") else ""
+            if doc_host and doc_host not in offer_hosts:
+                continue
+        positive_signals, negative_signals, sentiment_score = _sentiment_markers(haystack)
+        promo_raw = raw.get("promoSignals")
+        if isinstance(promo_raw, list):
+            promo_signals = [str(item).strip() for item in promo_raw if str(item).strip()]
+        else:
+            promo_count = _safe_int(promo_raw, 0)
+            promo_signals = [f"promo_{idx + 1}" for idx in range(max(0, promo_count))]
+        scoped.append(
+            {
+                "docId": doc_id or f"{source}-evidence",
+                "source": source,
+                "qualityScore": _safe_quality_score(raw.get("qualityScore")),
+                "promoSignals": promo_signals[:4],
+                "excerpt": excerpt,
+                "positiveSignals": positive_signals,
+                "negativeSignals": negative_signals,
+                "sentimentScore": sentiment_score,
+            }
+        )
+
+    scoped.sort(
+        key=lambda item: (
+            -_safe_int(item.get("qualityScore"), 0),
+            -_safe_int(item.get("sentimentScore"), 0),
+            len(item.get("promoSignals") or []),
+        )
+    )
+    return scoped[:12]
+
+
+def _derive_product_pros_cons(
+    evidence_rows: list[dict[str, Any]],
+    review: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    pros: list[str] = []
+    cons: list[str] = []
+    for row in evidence_rows:
+        excerpt = str(row.get("excerpt") or "").strip()
+        score = _safe_int(row.get("sentimentScore"), 0)
+        if score > 0 and excerpt and excerpt not in pros:
+            pros.append(excerpt)
+        if score < 0 and excerpt and excerpt not in cons:
+            cons.append(excerpt)
+    if not pros:
+        for signal in (review.get("pros") or []):
+            text = str(signal).strip()
+            if text and text not in pros:
+                pros.append(text)
+            if len(pros) >= 4:
+                break
+    if not cons:
+        for signal in (review.get("cons") or []):
+            text = str(signal).strip()
+            if text and text not in cons:
+                cons.append(text)
+            if len(cons) >= 4:
+                break
+    return pros[:4], cons[:4]
 
 
 def _offer_sort_key(offer: dict[str, Any]) -> tuple[int, int, int, float, float]:
@@ -313,10 +472,18 @@ def _build_session_products(checkpoint: dict[str, Any], services: ServiceContain
             or (_safe_int(offer.get("ratingCount"), 0) > 0)
         )
         total_offer_count = len(merged_offers)
+        evidence_rows = _build_product_evidence_rows(
+            review,
+            product_title=title,
+            offers=merged_offers,
+        )
+        derived_pros, derived_cons = _derive_product_pros_cons(evidence_rows, review)
         unique_refs: list[str] = []
         for ref in evidence_refs:
             if ref and ref not in unique_refs:
                 unique_refs.append(ref)
+        constraint_tier = str(candidate.get("constraintTier") or "strict").strip() or "strict"
+        constraint_relaxed = bool(candidate.get("constraintRelaxed") or constraint_tier != "strict")
         items.append(
             {
                 "productId": _product_id(canonical_key, unique_refs),
@@ -335,6 +502,8 @@ def _build_session_products(checkpoint: dict[str, Any], services: ServiceContain
                 "shippingETA": str(primary_offer.get("shippingETA") or "unknown"),
                 "returnPolicy": str(primary_offer.get("returnPolicy") or "unknown"),
                 "checkoutReady": candidate.get("checkoutReady", False),
+                "constraintTier": constraint_tier,
+                "constraintRelaxed": constraint_relaxed,
                 "evidenceRefs": unique_refs,
                 "primaryOffer": primary_offer,
                 "offers": merged_offers,
@@ -349,8 +518,9 @@ def _build_session_products(checkpoint: dict[str, Any], services: ServiceContain
                     "ratedOfferCount": rated_offer_count,
                     "totalOfferCount": total_offer_count,
                 },
-                "pros": [str(item) for item in review.get("pros", [])[:4]],
-                "cons": [str(item) for item in review.get("cons", [])[:4]],
+                "pros": derived_pros,
+                "cons": derived_cons,
+                "evidenceRows": evidence_rows,
                 "ingredientAnalysis": analysis,
                 "scientificScore": decision_block.get("scientificScore", {}),
                 "evidenceStats": decision_block.get("evidenceStats", {}),

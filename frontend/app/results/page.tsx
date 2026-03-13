@@ -97,6 +97,71 @@ function scoreTone(score: number) {
   return "text-rose-600 dark:text-rose-300";
 }
 
+function formatRating(value: number | null | undefined) {
+  if (typeof value !== "number" || value <= 0) {
+    return "N/A";
+  }
+  return value.toFixed(1);
+}
+
+function tierRank(tier: string | null | undefined) {
+  const normalized = (tier || "strict").toLowerCase();
+  if (normalized === "strict") return 0;
+  if (normalized === "soft_5") return 1;
+  if (normalized === "soft_10") return 2;
+  if (normalized === "soft_15") return 3;
+  return 9;
+}
+
+function tierLabel(tier: string | null | undefined) {
+  const normalized = (tier || "strict").toLowerCase();
+  if (normalized === "soft_5") return "soft +5%";
+  if (normalized === "soft_10") return "soft +10%";
+  if (normalized === "soft_15") return "soft +15%";
+  return "strict";
+}
+
+function isKnownValue(value: string | null | undefined) {
+  const normalized = (value || "").trim().toLowerCase();
+  return normalized.length > 0 && normalized !== "unknown" && normalized !== "n/a";
+}
+
+function evidenceSentiment(excerpt: string) {
+  const lowered = excerpt.toLowerCase();
+  const positive = [
+    "third-party",
+    "grass-fed",
+    "mixes well",
+    "good value",
+    "fast shipping",
+    "lactose free",
+  ].filter((token) => lowered.includes(token));
+  const negative = [
+    "fake",
+    "bad taste",
+    "overpriced",
+    "late delivery",
+    "stomach",
+    "clump",
+  ].filter((token) => lowered.includes(token));
+  return { positive, negative };
+}
+
+function ingredientDelta(index: number, type: "good" | "risk") {
+  if (type === "good") {
+    return Math.max(3, 8 - index);
+  }
+  return Math.max(4, 11 - index * 2);
+}
+
+function canonicalProductKey(product: SessionProduct) {
+  if (product.canonicalProductId) {
+    return product.canonicalProductId;
+  }
+  const normalizedTitle = product.title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return normalizedTitle || product.sourceUrl;
+}
+
 async function loadSessionBundle(
   sessionId: string,
   options: {
@@ -326,24 +391,52 @@ function ResultsContent() {
   const collectionInsights = useMemo(() => getCollectionInsights(snapshot), [snapshot]);
   const referenceLinks = useMemo(() => buildReferenceLinks(products, snapshot), [products, snapshot]);
 
-  const sortedProducts = useMemo(
-    () => [...products].sort((left, right) => right.scientificScore.finalTrust - left.scientificScore.finalTrust),
-    [products]
-  );
+  const sortedProducts = useMemo(() => {
+    const deduped = new Map<string, SessionProduct>();
+    for (const product of products) {
+      const key = canonicalProductKey(product);
+      const current = deduped.get(key);
+      const currentTier = tierRank(current?.constraintTier);
+      const nextTier = tierRank(product.constraintTier);
+      const currentRating = typeof current?.rating === "number" ? current.rating : 0;
+      const nextRating = typeof product.rating === "number" ? product.rating : 0;
+      if (
+        !current ||
+        nextTier < currentTier ||
+        (nextTier === currentTier && nextRating > currentRating) ||
+        (nextTier === currentTier && nextRating === currentRating && product.price < current.price)
+      ) {
+        deduped.set(key, product);
+      }
+    }
+    return [...deduped.values()].sort((left, right) => {
+      const leftTier = tierRank(left.constraintTier);
+      const rightTier = tierRank(right.constraintTier);
+      if (leftTier !== rightTier) return leftTier - rightTier;
+      const leftRating = typeof left.rating === "number" ? left.rating : 0;
+      const rightRating = typeof right.rating === "number" ? right.rating : 0;
+      if (leftRating !== rightRating) return rightRating - leftRating;
+      if (left.price !== right.price) return left.price - right.price;
+      return left.title.localeCompare(right.title);
+    });
+  }, [products]);
   const topProducts = useMemo(() => sortedProducts.slice(0, 10), [sortedProducts]);
+  const strictProducts = useMemo(
+    () => topProducts.filter((product) => !product.constraintRelaxed),
+    [topProducts]
+  );
 
   const selectedProduct = useMemo(() => {
+    const hasStrict = strictProducts.length > 0;
+    const scope = hasStrict ? strictProducts : topProducts;
     if (!recommendation?.decision?.selectedCandidate) {
-      return topProducts[0] ?? null;
+      return scope[0] ?? null;
     }
-    return (
-      topProducts.find(
-        (product) => product.sourceUrl === recommendation.decision?.selectedCandidate?.sourceUrl
-      ) ??
-      topProducts[0] ??
-      null
+    const selected = scope.find(
+      (product) => product.sourceUrl === recommendation.decision?.selectedCandidate?.sourceUrl
     );
-  }, [recommendation?.decision, topProducts]);
+    return selected ?? scope[0] ?? null;
+  }, [recommendation?.decision, strictProducts, topProducts]);
 
   const latestAssistantMessage = useMemo(
     () =>
@@ -359,13 +452,17 @@ function ResultsContent() {
 
   const trustRadarData = useMemo(
     () => [
-      { metric: "Rating", value: recommendation?.scientificScore.ratingReliability ?? 0 },
-      { metric: "Authenticity", value: recommendation?.scientificScore.spamAuthenticity ?? 0 },
-      { metric: "ABSA", value: recommendation?.scientificScore.absaAlignment ?? 0 },
-      { metric: "Visual", value: recommendation?.scientificScore.visualReliability ?? 0 },
+      { metric: "Rating", value: (recommendation?.scientificScore.ratingReliability ?? 0) * 100 },
+      { metric: "Authenticity", value: (recommendation?.scientificScore.spamAuthenticity ?? 0) * 100 },
+      { metric: "ABSA", value: (recommendation?.scientificScore.absaAlignment ?? 0) * 100 },
+      { metric: "Visual", value: (recommendation?.scientificScore.visualReliability ?? 0) * 100 },
       { metric: "Final", value: recommendation?.scientificScore.finalTrust ?? 0 },
     ],
     [recommendation?.scientificScore]
+  );
+  const hasTrustRadarSignal = useMemo(
+    () => trustRadarData.some((entry) => entry.value > 0),
+    [trustRadarData]
   );
 
   const sourceMixData = useMemo(
@@ -376,6 +473,19 @@ function ResultsContent() {
   const absaData = useMemo(
     () => reviewInsights.absaSignals.map((item) => ({ aspect: item.aspect, score: item.score })),
     [reviewInsights.absaSignals]
+  );
+
+  const evidenceRows = useMemo(
+    () =>
+      reviewInsights.rankedEvidence.slice(0, 8).map((item) => {
+        const sentiment = evidenceSentiment(item.excerpt || item.docId);
+        return {
+          ...item,
+          positiveCount: sentiment.positive.length,
+          negativeCount: sentiment.negative.length,
+        };
+      }),
+    [reviewInsights.rankedEvidence]
   );
 
   async function sendChatMessage() {
@@ -523,15 +633,15 @@ function ResultsContent() {
               </div>
             </div>
 
-            <div className="mt-8">
+            <div className="mx-auto mt-8 w-full max-w-5xl">
               <div className="mb-4 flex items-center justify-between gap-3">
                 <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Immediate shortlist</p>
                 <span className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--text-muted)]">
-                  {topProducts.length} products
+                  {topProducts.length} unique products
                 </span>
               </div>
               {topProducts.length ? (
-                <div className="grid gap-4 md:grid-cols-2">
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-2">
                   {topProducts.map((product) => {
                     const imageUrl =
                       typeof product.imageUrl === "string" && product.imageUrl.startsWith("http")
@@ -562,8 +672,27 @@ function ResultsContent() {
                             <span className="font-semibold text-[color:var(--text-strong)]">
                               ${product.price.toFixed(2)}
                             </span>
-                            <span>{product.rating ? product.rating.toFixed(1) : "n/a"} stars</span>
+                            <span>{formatRating(product.rating)} stars</span>
+                            <span
+                              className={`rounded-full border px-2 py-0.5 text-xs ${
+                                product.constraintRelaxed
+                                  ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                                  : "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                              }`}
+                            >
+                              {tierLabel(product.constraintTier)}
+                            </span>
+                            {(product.offers?.length ?? 0) > 1 ? (
+                              <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-xs text-[color:var(--text-muted)]">
+                                {product.offers?.length} offers
+                              </span>
+                            ) : null}
                           </div>
+                          {product.constraintRelaxed ? (
+                            <p className="text-xs text-amber-700 dark:text-amber-300">
+                              Constraint-relaxed: strict tier lacked enough candidates.
+                            </p>
+                          ) : null}
                           <Link
                             href={`/product/${product.productId}?session=${activeSessionId}`}
                             className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-4 py-2 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
@@ -601,8 +730,17 @@ function ResultsContent() {
                     <span className="text-lg font-semibold text-[color:var(--text-strong)]">
                       ${selectedProduct.price.toFixed(2)}
                     </span>
-                    <span>{selectedProduct.shippingETA}</span>
-                    <span>{selectedProduct.returnPolicy}</span>
+                    {isKnownValue(selectedProduct.shippingETA) ? <span>{selectedProduct.shippingETA}</span> : null}
+                    {isKnownValue(selectedProduct.returnPolicy) ? <span>{selectedProduct.returnPolicy}</span> : null}
+                    {selectedProduct.constraintRelaxed ? (
+                      <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs text-amber-700 dark:text-amber-300">
+                        {tierLabel(selectedProduct.constraintTier)}
+                      </span>
+                    ) : (
+                      <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-700 dark:text-emerald-300">
+                        strict
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="grid gap-4">
@@ -621,6 +759,21 @@ function ResultsContent() {
                         ? "Ready for checkout handoff"
                         : "Needs extra checkout verification"}
                     </div>
+                    <ul className="mt-3 space-y-2 text-xs leading-6 text-[color:var(--text-soft)]">
+                      {selectedProduct.ingredientAnalysis.beneficialSignals.slice(0, 2).map((signal, index) => (
+                        <li key={`${signal.ingredient}-${signal.note}`} className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
+                          • +{ingredientDelta(index, "good")} {signal.ingredient}
+                        </li>
+                      ))}
+                      {selectedProduct.ingredientAnalysis.redFlags.slice(0, 1).map((signal, index) => (
+                        <li
+                          key={`${signal.ingredient}-${signal.note}`}
+                          className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-rose-700 dark:text-rose-300"
+                        >
+                          • -{ingredientDelta(index, "risk")} risk: {signal.ingredient}
+                        </li>
+                      ))}
+                    </ul>
                     <Link
                       href={`/product/${selectedProduct.productId}?session=${activeSessionId}`}
                       className="mt-4 inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-4 py-2 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
@@ -655,30 +808,36 @@ function ResultsContent() {
               </div>
             </summary>
 
-            <div className="mt-6 grid gap-8 xl:grid-cols-[1.1fr_0.9fr]">
-              <div className="space-y-8">
+            <div className="mt-6 grid gap-8 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+              <div className="min-w-0 space-y-8">
                 <TracePanel trace={recommendation?.trace ?? []} />
 
                 <Panel eyebrow="Evidence ledger" title="Ranked review evidence">
                   <div className="overflow-hidden rounded-[1.5rem] border border-[color:var(--border)]">
-                    <div className="grid grid-cols-[0.24fr_0.18fr_0.18fr_1fr] bg-[color:var(--surface-strong)] px-4 py-3 text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
+                    <div className="grid grid-cols-[minmax(80px,0.2fr)_64px_64px_64px_64px_minmax(0,1fr)] gap-3 bg-[color:var(--surface-strong)] px-4 py-3 text-[11px] uppercase tracking-[0.16em] text-[color:var(--text-muted)]">
                       <span>Source</span>
                       <span>Quality</span>
                       <span>Promo</span>
+                      <span>Pos</span>
+                      <span>Neg</span>
                       <span>Excerpt</span>
                     </div>
-                    {reviewInsights.rankedEvidence.slice(0, 5).map((item) => (
+                    {evidenceRows.map((item) => (
                       <div
                         key={`${item.docId}-${item.source}`}
-                        className="grid grid-cols-[0.24fr_0.18fr_0.18fr_1fr] gap-3 border-t border-[color:var(--border)] px-4 py-4 text-sm"
+                        className="grid grid-cols-[minmax(80px,0.2fr)_64px_64px_64px_64px_minmax(0,1fr)] gap-3 border-t border-[color:var(--border)] px-4 py-4 text-sm"
                       >
                         <span className="font-medium capitalize text-[color:var(--text-strong)]">{item.source}</span>
                         <span className={scoreTone(item.qualityScore)}>{item.qualityScore}</span>
                         <span className="text-[color:var(--text-soft)]">{item.promoSignals.length}</span>
-                        <span className="text-[color:var(--text-soft)]">{item.excerpt || item.docId}</span>
+                        <span className="text-emerald-700 dark:text-emerald-300">{item.positiveCount}</span>
+                        <span className="text-rose-700 dark:text-rose-300">{item.negativeCount}</span>
+                        <span className="line-clamp-2 text-[color:var(--text-soft)]" title={item.excerpt || item.docId}>
+                          {item.excerpt || item.docId}
+                        </span>
                       </div>
                     ))}
-                    {!reviewInsights.rankedEvidence.length ? (
+                    {!evidenceRows.length ? (
                       <div className="border-t border-[color:var(--border)] px-4 py-4 text-sm text-[color:var(--text-soft)]">
                         Ranked evidence will appear when the review agent has enough context.
                       </div>
@@ -687,17 +846,33 @@ function ResultsContent() {
                 </Panel>
               </div>
 
-              <div className="space-y-8">
+              <div className="min-w-0 space-y-8">
                 <Panel eyebrow="Decision matrix" title="Scientific trust radar">
-                  <div className="h-80">
-                    <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={280}>
-                      <RadarChart data={trustRadarData}>
-                        <PolarGrid stroke="var(--border)" />
-                        <PolarAngleAxis dataKey="metric" tick={{ fill: "currentColor", fontSize: 12 }} />
-                        <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
-                        <Radar dataKey="value" stroke="var(--accent)" fill="var(--accent)" fillOpacity={0.18} />
-                      </RadarChart>
-                    </ResponsiveContainer>
+                  {hasTrustRadarSignal ? (
+                    <div className="h-80">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <RadarChart data={trustRadarData}>
+                          <PolarGrid stroke="var(--border)" />
+                          <PolarAngleAxis dataKey="metric" tick={{ fill: "currentColor", fontSize: 12 }} />
+                          <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
+                          <Radar dataKey="value" stroke="var(--accent)" fill="var(--accent)" fillOpacity={0.2} />
+                        </RadarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  ) : (
+                    <div className="rounded-[1.4rem] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+                      Insufficient signal for a meaningful radar profile in this turn.
+                    </div>
+                  )}
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {trustRadarData.map((item) => (
+                      <span
+                        key={item.metric}
+                        className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-3 py-1 text-xs text-[color:var(--text-soft)]"
+                      >
+                        {item.metric}: {item.value.toFixed(1)}
+                      </span>
+                    ))}
                   </div>
                 </Panel>
 
@@ -719,7 +894,7 @@ function ResultsContent() {
 
                 <Panel eyebrow="Review coverage" title="Source mix">
                   <div className="h-72">
-                    <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={240}>
+                    <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={sourceMixData} barSize={38}>
                         <CartesianGrid vertical={false} stroke="var(--border)" />
                         <XAxis dataKey="source" tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
@@ -733,7 +908,7 @@ function ResultsContent() {
 
                 <Panel eyebrow="Aspect signals" title="ABSA alignment">
                   <div className="h-72">
-                    <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={240}>
+                    <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={absaData} barSize={30} layout="vertical">
                         <CartesianGrid horizontal={false} stroke="var(--border)" />
                         <XAxis type="number" domain={[0, 100]} tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
@@ -790,7 +965,7 @@ function ResultsContent() {
           </Link>
         </div>
 
-        <aside className="flex flex-col rounded-[2.4rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)] xl:sticky xl:top-24 xl:h-[calc(100vh-7rem)]">
+        <aside className="self-start flex flex-col rounded-[2.4rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Live session</p>
@@ -811,7 +986,7 @@ function ResultsContent() {
               </p>
             </div>
           ) : null}
-          <div ref={chatScrollRef} className="mt-6 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
+          <div ref={chatScrollRef} className="mt-6 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain pr-1">
             {messages.map((message, index) => {
               const isUser = message.role === "user";
               const meta =
