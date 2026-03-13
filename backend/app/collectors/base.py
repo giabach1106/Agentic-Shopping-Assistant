@@ -3,7 +3,15 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Protocol
 
-SourceName = Literal["amazon", "reddit", "tiktok", "ebay", "walmart"]
+SourceName = Literal[
+    "amazon",
+    "reddit",
+    "tiktok",
+    "ebay",
+    "walmart",
+    "nutritionfaktory",
+    "dps",
+]
 
 
 @dataclass(slots=True)

@@ -108,6 +108,7 @@ def test_catalog_metrics_endpoint(client: TestClient) -> None:
 
 
 def test_warmup_record_builder_keeps_required_fields() -> None:
+    rejection_counts: dict[str, int] = {}
     collection = {
         "products": [
             {
@@ -137,12 +138,26 @@ def test_warmup_record_builder_keeps_required_fields() -> None:
                 "rating_count": 0,
                 "retrieved_at": "2026-03-12T12:00:00+00:00",
             },
+            {
+                "source": "walmart",
+                "url": "https://www.walmart.com/ip/123456",
+                "title": "Valid Walmart Whey Isolate Product",
+                "price": 29.99,
+                "avg_rating": 4.2,
+                "rating_count": 120,
+                "retrieved_at": "2026-03-12T12:00:00+00:00",
+            },
         ],
         "reviews": [
             {
                 "source": "ebay",
                 "url": "https://www.ebay.com/itm/1234567890",
                 "review_text": "Good texture and no flavor issues.",
+            },
+            {
+                "source": "walmart",
+                "url": "https://www.walmart.com/ip/123456",
+                "review_text": "Good whey isolate profile.",
             }
         ],
         "visuals": [
@@ -150,16 +165,22 @@ def test_warmup_record_builder_keeps_required_fields() -> None:
                 "source": "ebay",
                 "url": "https://www.ebay.com/itm/1234567890",
                 "image_url": "https://example.com/product.jpg",
+            },
+            {
+                "source": "walmart",
+                "url": "https://www.walmart.com/ip/123456",
+                "image_url": "https://example.com/walmart.jpg",
             }
         ],
     }
-    rows = _build_records(collection)
+    rows = _build_records(collection, rejection_counts=rejection_counts)
     assert len(rows) == 1
     row = rows[0]
     assert row["title"]
     assert row["url"].startswith("http")
     assert isinstance(row["review_snippets"], list)
     assert row["ingredient_text"]
+    assert rejection_counts.get("unsupported_source_walmart", 0) >= 1
 
 
 def test_catalog_store_normalizes_url_and_rejects_search_pages(tmp_path: Path) -> None:

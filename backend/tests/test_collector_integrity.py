@@ -17,8 +17,10 @@ def test_noise_title_detection_filters_rating_labels() -> None:
 def test_marketplace_challenge_detection() -> None:
     ebay_html = "<html><title>Pardon Our Interruption...</title></html>"
     walmart_html = "<html><title>Robot or human?</title><div>px-captcha</div></html>"
+    dps_html = "<html><title>Attention Required</title><div>/cdn-cgi/challenge-platform</div></html>"
     assert _detect_marketplace_challenge("ebay", ebay_html) is not None
     assert _detect_marketplace_challenge("walmart", walmart_html) is not None
+    assert _detect_marketplace_challenge("dps", dps_html) is not None
     assert _detect_marketplace_challenge("amazon", "<html>normal listing page</html>") is None
 
 

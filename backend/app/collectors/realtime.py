@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import re
 import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 import httpx
 
@@ -102,6 +103,20 @@ _MARKETPLACE_CHALLENGE_MARKERS: dict[str, tuple[str, ...]] = {
         "verify you are human",
         "please complete the security check",
     ),
+    "nutritionfaktory": (
+        "attention required",
+        "just a moment",
+        "/cdn-cgi/challenge-platform",
+        "cf_chl_opt",
+        "captcha",
+    ),
+    "dps": (
+        "attention required",
+        "just a moment",
+        "/cdn-cgi/challenge-platform",
+        "cf_chl_opt",
+        "captcha",
+    ),
 }
 
 
@@ -128,6 +143,16 @@ def _extract_numeric_price(value: str) -> float | None:
         return float(match.group(1).replace(",", ""))
     except ValueError:
         return None
+
+
+def _title_from_url_slug(value: str) -> str:
+    parsed = urlparse(value)
+    slug = parsed.path.strip("/").split("/")[-1]
+    if not slug:
+        return ""
+    cleaned = re.sub(r"\.(?:htm|html)$", "", slug, flags=re.IGNORECASE)
+    cleaned = cleaned.replace("-", " ")
+    return _normalize_text(cleaned)
 
 
 def _is_product_label_noise(value: str) -> bool:
@@ -270,6 +295,63 @@ def _detect_marketplace_challenge(source: str, body: str) -> str | None:
     return None
 
 
+def _extract_json_ld_payloads(body: str) -> list[Any]:
+    payloads: list[Any] = []
+    script_matches = re.findall(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>([\s\S]*?)</script>',
+        body,
+        re.IGNORECASE,
+    )
+    for raw in script_matches:
+        text = raw.strip()
+        if not text:
+            continue
+        try:
+            loaded = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        payloads.append(loaded)
+    return payloads
+
+
+def _iter_json_ld_products(node: Any) -> list[dict[str, Any]]:
+    products: list[dict[str, Any]] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            item_type = str(value.get("@type") or "").strip().lower()
+            if item_type == "product":
+                products.append(value)
+            for nested in value.values():
+                walk(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                walk(nested)
+
+    walk(node)
+    return products
+
+
+def _first_offer(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict):
+                return item
+    return {}
+
+
+def _first_image_url(value: Any) -> str | None:
+    if isinstance(value, str) and value.startswith("http"):
+        return value
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, str) and item.startswith("http"):
+                return item
+    return None
+
+
 class DevRealtimeCollector:
     """Deterministic pseudo-live collector for local development and tests."""
 
@@ -347,6 +429,38 @@ class DevRealtimeCollector:
                 confidence_source=0.83,
                 raw_snapshot_ref=f"dev://amazon/search/{query_id}",
                 image_url="https://images-na.ssl-images-amazon.com/images/I/71y-8zIafSL._SL1500_.jpg",
+            ),
+            ProductCandidateData(
+                source="nutritionfaktory",
+                url="https://nutritionfaktory.com/products/transparent-labs-grass-fed-isolate-30srv",
+                title="Transparent Labs Grass-Fed Isolate 30 Servings",
+                price=59.0,
+                avg_rating=5.0,
+                rating_count=21,
+                shipping_eta="3-6 days",
+                return_policy="Store return policy",
+                seller_info="NutritionFaktory",
+                retrieved_at=now,
+                evidence_id=f"nf-offer-{query_id}-1",
+                confidence_source=0.82,
+                raw_snapshot_ref=f"dev://nutritionfaktory/search/{query_id}",
+                image_url="https://cdn.shopify.com/s/files/1/2640/1510/files/MintChocolateChip.webp?v=1705419159",
+            ),
+            ProductCandidateData(
+                source="dps",
+                url="https://www.dpsnutrition.net/i/29230/gaspari-proven-whey-100-hydrolized-isolate.htm",
+                title="Gaspari Nutrition Proven Whey 100% Hydrolyzed Isolate Blueberry Cobbler - 4 Lb",
+                price=33.74,
+                avg_rating=4.5,
+                rating_count=84,
+                shipping_eta="3-6 days",
+                return_policy="Store return policy",
+                seller_info="DPS Nutrition",
+                retrieved_at=now,
+                evidence_id=f"dps-offer-{query_id}-1",
+                confidence_source=0.79,
+                raw_snapshot_ref=f"dev://dps/search/{query_id}",
+                image_url="https://siteimgs.com/10017/item/proven-whey.jpg",
             ),
         ]
         reviews = [
@@ -460,6 +574,20 @@ class DevRealtimeCollector:
                 duration_ms=22,
             ),
             CollectorTraceEvent(
+                source="nutritionfaktory",
+                step="collect_products",
+                status="ok",
+                detail="Collected product cards from development dataset.",
+                duration_ms=21,
+            ),
+            CollectorTraceEvent(
+                source="dps",
+                step="collect_products",
+                status="ok",
+                detail="Collected product cards from development dataset.",
+                duration_ms=21,
+            ),
+            CollectorTraceEvent(
                 source="reddit",
                 step="collect_reviews",
                 status="ok",
@@ -493,6 +621,8 @@ class LiveRealtimeCollector:
             self._collect_ebay(query, result),
             self._collect_walmart(query, result),
             self._collect_amazon(query, result),
+            self._collect_nutritionfaktory(query, result),
+            self._collect_dps(query, result),
             self._collect_reddit(query, result),
             self._collect_tiktok(query, result),
         ]
@@ -1117,6 +1247,315 @@ class LiveRealtimeCollector:
                     step="collect_products",
                     status="error",
                     detail=f"Walmart collection error: {exc!r}",
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                )
+            )
+
+    async def _collect_nutritionfaktory(self, query: str, result: CollectionResult) -> None:
+        started = time.perf_counter()
+        source: SourceName = "nutritionfaktory"
+        try:
+            url = f"https://nutritionfaktory.com/search?q={quote_plus(query)}"
+            response = await self._client.get(url)
+            body = response.text
+            challenge_marker = _detect_marketplace_challenge(source, body)
+            if challenge_marker:
+                result.missing_evidence.append("nutritionfaktory.product_list")
+                result.blocked_sources.append(source)
+                result.trace.append(
+                    CollectorTraceEvent(
+                        source=source,
+                        step="collect_products",
+                        status="blocked",
+                        detail=f"NutritionFaktory anti-bot challenge detected ({challenge_marker}).",
+                        duration_ms=int((time.perf_counter() - started) * 1000),
+                    )
+                )
+                return
+
+            payloads = _extract_json_ld_payloads(body)
+            now = _now_iso()
+            added = 0
+            seen_urls: set[str] = set()
+            for payload in payloads:
+                if added >= 16:
+                    break
+                for product in _iter_json_ld_products(payload):
+                    if added >= 16:
+                        break
+                    offer = _first_offer(product.get("offers"))
+                    raw_url = str(offer.get("url") or product.get("url") or "").strip()
+                    if not raw_url.startswith("http"):
+                        continue
+                    item_url = raw_url.split("?", 1)[0]
+                    if item_url in seen_urls:
+                        continue
+                    seen_urls.add(item_url)
+
+                    title = _decode_html_text(str(product.get("name") or ""))
+                    slug_title = _title_from_url_slug(item_url)
+                    if not _is_relevant_supplement_text(title, query):
+                        title = f"{slug_title} {title}".strip()
+                    if (
+                        not title
+                        or _is_product_label_noise(title)
+                        or not _is_relevant_supplement_text(title, query)
+                    ):
+                        continue
+
+                    aggregate = product.get("aggregateRating")
+                    aggregate_dict = aggregate if isinstance(aggregate, dict) else {}
+                    rating_value = _safe_float(
+                        str(aggregate_dict.get("ratingValue")) if aggregate_dict else None,
+                        0.0,
+                    )
+                    rating_count_value = max(
+                        _safe_int(str(aggregate_dict.get("ratingCount")) if aggregate_dict else None, 0),
+                        _safe_int(str(aggregate_dict.get("reviewCount")) if aggregate_dict else None, 0),
+                    )
+                    price_value = _safe_float(str(offer.get("price") or product.get("price") or ""), 0.0)
+                    if price_value <= 0:
+                        continue
+                    image_url = _first_image_url(product.get("image"))
+                    description = _decode_html_text(str(product.get("description") or ""))
+                    review_text = description[:520] if description else f"{title} review summary."
+
+                    result.products.append(
+                        ProductCandidateData(
+                            source=source,
+                            url=item_url,
+                            title=title[:280],
+                            price=price_value,
+                            avg_rating=rating_value,
+                            rating_count=rating_count_value,
+                            shipping_eta="unknown",
+                            return_policy="Store return policy",
+                            seller_info="NutritionFaktory",
+                            retrieved_at=now,
+                            evidence_id=f"nf-offer-{uuid.uuid4().hex[:10]}",
+                            confidence_source=0.71,
+                            raw_snapshot_ref=url,
+                            image_url=image_url,
+                        )
+                    )
+                    result.reviews.append(
+                        ReviewRecord(
+                            source=source,
+                            url=item_url,
+                            review_id=f"nf-rv-{uuid.uuid4().hex[:10]}",
+                            rating=rating_value if rating_value > 0 else 4.0,
+                            review_text=review_text,
+                            timestamp=now,
+                            helpful_votes=rating_count_value,
+                            verified_purchase=None,
+                            media_count=1 if image_url else 0,
+                            retrieved_at=now,
+                            evidence_id=f"nf-ev-{uuid.uuid4().hex[:10]}",
+                            confidence_source=0.68,
+                            raw_snapshot_ref=url,
+                        )
+                    )
+                    if image_url:
+                        result.visuals.append(
+                            VisualRecord(
+                                source=source,
+                                url=item_url,
+                                image_url=image_url,
+                                caption=title[:200],
+                                retrieved_at=now,
+                                evidence_id=f"nf-img-{uuid.uuid4().hex[:10]}",
+                                confidence_source=0.65,
+                                raw_snapshot_ref=url,
+                            )
+                        )
+                    added += 1
+
+            if added == 0:
+                result.missing_evidence.append("nutritionfaktory.product_list")
+                result.blocked_sources.append(source)
+                result.trace.append(
+                    CollectorTraceEvent(
+                        source=source,
+                        step="collect_products",
+                        status="blocked",
+                        detail="Unable to parse product cards from NutritionFaktory page.",
+                        duration_ms=int((time.perf_counter() - started) * 1000),
+                    )
+                )
+                return
+
+            result.trace.append(
+                CollectorTraceEvent(
+                    source=source,
+                    step="collect_products",
+                    status="ok",
+                    detail=f"Collected {added} live NutritionFaktory product candidates.",
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            result.missing_evidence.append("nutritionfaktory.product_list")
+            result.blocked_sources.append(source)
+            result.trace.append(
+                CollectorTraceEvent(
+                    source=source,
+                    step="collect_products",
+                    status="error",
+                    detail=f"NutritionFaktory collection error: {exc!r}",
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                )
+            )
+
+    async def _collect_dps(self, query: str, result: CollectionResult) -> None:
+        started = time.perf_counter()
+        source: SourceName = "dps"
+        try:
+            url = f"https://www.dpsnutrition.net/search?type=product&q={quote_plus(query)}"
+            response = await self._client.get(url)
+            body = response.text
+            challenge_marker = _detect_marketplace_challenge(source, body)
+            if challenge_marker:
+                result.missing_evidence.append("dps.product_list")
+                result.blocked_sources.append(source)
+                result.trace.append(
+                    CollectorTraceEvent(
+                        source=source,
+                        step="collect_products",
+                        status="blocked",
+                        detail=f"DPS anti-bot challenge detected ({challenge_marker}).",
+                        duration_ms=int((time.perf_counter() - started) * 1000),
+                    )
+                )
+                return
+
+            payloads = _extract_json_ld_payloads(body)
+            now = _now_iso()
+            added = 0
+            seen_urls: set[str] = set()
+            for payload in payloads:
+                if added >= 16:
+                    break
+                for product in _iter_json_ld_products(payload):
+                    if added >= 16:
+                        break
+                    offer = _first_offer(product.get("offers"))
+                    raw_url = str(offer.get("url") or product.get("url") or "").replace("\\/", "/").strip()
+                    if not raw_url.startswith("http"):
+                        continue
+                    item_url = raw_url.split("?", 1)[0]
+                    if item_url in seen_urls:
+                        continue
+                    seen_urls.add(item_url)
+
+                    title = _decode_html_text(str(product.get("name") or ""))
+                    if not _is_relevant_supplement_text(title, query):
+                        title = _title_from_url_slug(item_url)
+                    if (
+                        not title
+                        or _is_product_label_noise(title)
+                        or not _is_relevant_supplement_text(title, query)
+                    ):
+                        continue
+
+                    aggregate = product.get("aggregateRating")
+                    aggregate_dict = aggregate if isinstance(aggregate, dict) else {}
+                    rating_value = _safe_float(
+                        str(aggregate_dict.get("ratingValue")) if aggregate_dict else None,
+                        0.0,
+                    )
+                    rating_count_value = max(
+                        _safe_int(str(aggregate_dict.get("ratingCount")) if aggregate_dict else None, 0),
+                        _safe_int(str(aggregate_dict.get("reviewCount")) if aggregate_dict else None, 0),
+                    )
+                    price_value = _safe_float(str(offer.get("price") or product.get("price") or ""), 0.0)
+                    if price_value <= 0:
+                        continue
+                    image_url = _first_image_url(product.get("image"))
+                    description = _decode_html_text(str(product.get("description") or ""))
+                    review_text = description[:520] if description else f"{title} listing summary."
+
+                    result.products.append(
+                        ProductCandidateData(
+                            source=source,
+                            url=item_url,
+                            title=title[:280],
+                            price=price_value,
+                            avg_rating=rating_value,
+                            rating_count=rating_count_value,
+                            shipping_eta="unknown",
+                            return_policy="Store return policy",
+                            seller_info="DPS Nutrition",
+                            retrieved_at=now,
+                            evidence_id=f"dps-offer-{uuid.uuid4().hex[:10]}",
+                            confidence_source=0.67,
+                            raw_snapshot_ref=url,
+                            image_url=image_url,
+                        )
+                    )
+                    result.reviews.append(
+                        ReviewRecord(
+                            source=source,
+                            url=item_url,
+                            review_id=f"dps-rv-{uuid.uuid4().hex[:10]}",
+                            rating=rating_value if rating_value > 0 else 4.0,
+                            review_text=review_text,
+                            timestamp=now,
+                            helpful_votes=rating_count_value,
+                            verified_purchase=None,
+                            media_count=1 if image_url else 0,
+                            retrieved_at=now,
+                            evidence_id=f"dps-ev-{uuid.uuid4().hex[:10]}",
+                            confidence_source=0.63,
+                            raw_snapshot_ref=url,
+                        )
+                    )
+                    if image_url:
+                        result.visuals.append(
+                            VisualRecord(
+                                source=source,
+                                url=item_url,
+                                image_url=image_url,
+                                caption=title[:200],
+                                retrieved_at=now,
+                                evidence_id=f"dps-img-{uuid.uuid4().hex[:10]}",
+                                confidence_source=0.6,
+                                raw_snapshot_ref=url,
+                            )
+                        )
+                    added += 1
+
+            if added == 0:
+                result.missing_evidence.append("dps.product_list")
+                result.blocked_sources.append(source)
+                result.trace.append(
+                    CollectorTraceEvent(
+                        source=source,
+                        step="collect_products",
+                        status="blocked",
+                        detail="Unable to parse product cards from DPS page.",
+                        duration_ms=int((time.perf_counter() - started) * 1000),
+                    )
+                )
+                return
+
+            result.trace.append(
+                CollectorTraceEvent(
+                    source=source,
+                    step="collect_products",
+                    status="ok",
+                    detail=f"Collected {added} live DPS product candidates.",
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            result.missing_evidence.append("dps.product_list")
+            result.blocked_sources.append(source)
+            result.trace.append(
+                CollectorTraceEvent(
+                    source=source,
+                    step="collect_products",
+                    status="error",
+                    detail=f"DPS collection error: {exc!r}",
                     duration_ms=int((time.perf_counter() - started) * 1000),
                 )
             )

@@ -62,6 +62,8 @@ class ReviewEvidenceAnalyzer:
         "tiktok": 0.65,
         "ebay": 0.76,
         "walmart": 0.8,
+        "nutritionfaktory": 0.83,
+        "dps": 0.81,
         "bedrock-kb": 0.75,
     }
     _promo_patterns = (

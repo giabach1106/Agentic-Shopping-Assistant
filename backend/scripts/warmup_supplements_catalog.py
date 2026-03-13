@@ -82,6 +82,7 @@ _SUPPLEMENT_KEYWORDS = (
     "eaa",
     "glutamine",
 )
+_TARGET_COMMERCE_SOURCES = {"amazon", "ebay", "nutritionfaktory", "dps"}
 
 
 def _normalize_url(value: str) -> str:
@@ -197,6 +198,9 @@ def _build_records(
         if not source or not url.startswith("http") or not title:
             _track_reject(rejection_counts, "missing_core_fields")
             continue
+        if source not in _TARGET_COMMERCE_SOURCES:
+            _track_reject(rejection_counts, f"unsupported_source_{source or 'unknown'}")
+            continue
         if _is_search_listing_url(url):
             _track_reject(rejection_counts, "search_url")
             continue
@@ -278,7 +282,7 @@ async def warmup_catalog(target_records: int) -> dict[str, Any]:
                 deduped[str(record["url"])] = record
                 if len(deduped) >= target_records:
                     break
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(0.15)
     finally:
         await collector._client.aclose()
 
@@ -297,6 +301,7 @@ async def warmup_catalog(target_records: int) -> dict[str, Any]:
         (metrics["ratedRecords"] / max(1, metrics["seededRecords"])),
         4,
     )
+    metrics["sourcesTargeted"] = sorted(_TARGET_COMMERCE_SOURCES)
     metrics["rejectedCounts"] = dict(sorted(rejection_counts.items(), key=lambda entry: entry[0]))
     return metrics
 
@@ -308,7 +313,7 @@ def main() -> None:
     parser.add_argument(
         "--target",
         type=int,
-        default=100,
+        default=1600,
         help="Target number of unique product URLs to seed.",
     )
     args = parser.parse_args()
@@ -316,6 +321,7 @@ def main() -> None:
     metrics = asyncio.run(warmup_catalog(max(10, args.target)))
     print("Warmup completed.")
     print(f"Target records: {metrics['targetRecords']}")
+    print(f"Sources targeted: {metrics['sourcesTargeted']}")
     print(f"Seeded records: {metrics['seededRecords']}")
     print(f"Queries attempted: {metrics['queriesAttempted']}")
     print(f"Pruned legacy search records: {metrics['prunedLegacySearchRecords']}")

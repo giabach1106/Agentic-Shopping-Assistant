@@ -285,9 +285,11 @@ class SQLiteEvidenceStore:
                 COALESCE(rating_count, 0) DESC,
                 CASE source
                     WHEN 'amazon' THEN 0
-                    WHEN 'walmart' THEN 1
-                    WHEN 'ebay' THEN 2
-                    ELSE 3
+                    WHEN 'ebay' THEN 1
+                    WHEN 'nutritionfaktory' THEN 2
+                    WHEN 'dps' THEN 3
+                    WHEN 'walmart' THEN 4
+                    ELSE 5
                 END ASC,
                 retrieved_at DESC,
                 updated_at DESC
