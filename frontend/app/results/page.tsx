@@ -786,6 +786,109 @@ function ResultsContent() {
           </section>
 
 
+        <aside className="mx-auto flex w-full max-w-5xl flex-col rounded-[2.4rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Live session</p>
+              <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Follow-up console</h2>
+            </div>
+            <div className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--text-muted)]">
+              {messages.length} messages
+            </div>
+          </div>
+          {sending ? (
+            <div className="mt-4 rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3">
+              <div className="flex items-center gap-2 text-sm text-[color:var(--text-strong)]">
+                <LoaderCircle className="h-4 w-4 animate-spin text-[color:var(--accent)]" />
+                {THINKING_STAGES[thinkingStageIndex]}
+              </div>
+              <p className="mt-2 text-xs leading-6 text-[color:var(--text-muted)]">
+                Structured reasoning updates while the agent run is in progress.
+              </p>
+            </div>
+          ) : null}
+          <div className="mt-6 flex flex-col gap-3">
+            {messages.map((message, index) => {
+              const isUser = message.role === "user";
+              const meta =
+                !isUser && message.meta && typeof message.meta === "object"
+                  ? (message.meta as Record<string, unknown>)
+                  : null;
+              const topReasons = Array.isArray(meta?.topReasons)
+                ? meta?.topReasons.map((item) => String(item))
+                : [];
+              const missingEvidence = Array.isArray(meta?.missingEvidence)
+                ? meta?.missingEvidence.map((item) => String(item))
+                : [];
+              return (
+                <div key={`${message.createdAt}-${message.clientId ?? index}`} className={`flex gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
+                  {!isUser ? (
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[color:var(--accent-soft)] text-[color:var(--accent)]">
+                      <Bot className="h-4 w-4" />
+                    </div>
+                  ) : null}
+                  <div className={`max-w-[84%] rounded-[1.5rem] px-4 py-3 text-sm leading-7 ${isUser ? "bg-[color:var(--text-strong)] text-[color:var(--background)]" : "border border-[color:var(--border)] bg-[color:var(--surface-strong)] text-[color:var(--text-soft)]"}`}>
+                    <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-[0.24em] opacity-70">
+                      {isUser ? <User className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
+                      {message.role}
+                      <span>{formatTimestamp(message.createdAt)}</span>
+                      {message.optimistic ? (
+                        <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[10px]">
+                          sending
+                        </span>
+                      ) : null}
+                    </div>
+                    <p>{meta?.summary ? String(meta.summary) : message.content}</p>
+                    {!isUser && meta ? (
+                      <details className="mt-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
+                        <summary className="cursor-pointer text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                          Reasoning details
+                        </summary>
+                        <div className="mt-2 space-y-2 text-xs leading-6">
+                          {typeof meta.verdict === "string" || typeof meta.trust === "number" ? (
+                            <p>
+                              Verdict: {String(meta.verdict || "pending")} | Trust:{" "}
+                              {typeof meta.trust === "number" ? meta.trust.toFixed(2) : "n/a"}
+                            </p>
+                          ) : null}
+                          {topReasons.length ? <p>Factors: {topReasons.join(" | ")}</p> : null}
+                          {missingEvidence.length ? <p>Missing: {missingEvidence.join(", ")}</p> : null}
+                        </div>
+                      </details>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-6 space-y-3">
+            <label className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">
+              {needsFollowUp ? "Resume blocked run" : "Refine the brief"}
+            </label>
+            <textarea
+              value={chatInput}
+              onChange={(event) => setChatInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  void sendChatMessage();
+                }
+              }}
+              placeholder={needsFollowUp ? "Example: prioritize verified sellers with free returns." : "Example: keep only options with 4.5+ stars and delivery this week."}
+              className="min-h-28 w-full rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm leading-7 text-[color:var(--text-strong)] outline-none transition placeholder:text-[color:var(--text-muted)] focus:border-[color:var(--accent)]"
+            />
+            <button type="button" onClick={() => void sendChatMessage()} disabled={!chatInput.trim() || sending || !activeSessionId} className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[color:var(--accent)] px-4 py-3 text-sm font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
+              {sending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              {needsFollowUp ? "Resume agent" : "Send follow-up"}
+            </button>
+            {error ? (
+              <div className="rounded-[1.4rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-300">
+                {error}
+              </div>
+            ) : null}
+          </div>
+        </aside>
+
           <details className="group rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
             <summary className="cursor-pointer list-none">
               <div className="flex items-center justify-between gap-3">
@@ -960,108 +1063,6 @@ function ResultsContent() {
           </Link>
         </div>
 
-        <aside className="mx-auto flex w-full max-w-5xl flex-col rounded-[2.4rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Live session</p>
-              <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Follow-up console</h2>
-            </div>
-            <div className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--text-muted)]">
-              {messages.length} messages
-            </div>
-          </div>
-          {sending ? (
-            <div className="mt-4 rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3">
-              <div className="flex items-center gap-2 text-sm text-[color:var(--text-strong)]">
-                <LoaderCircle className="h-4 w-4 animate-spin text-[color:var(--accent)]" />
-                {THINKING_STAGES[thinkingStageIndex]}
-              </div>
-              <p className="mt-2 text-xs leading-6 text-[color:var(--text-muted)]">
-                Structured reasoning updates while the agent run is in progress.
-              </p>
-            </div>
-          ) : null}
-          <div className="mt-6 flex flex-col gap-3">
-            {messages.map((message, index) => {
-              const isUser = message.role === "user";
-              const meta =
-                !isUser && message.meta && typeof message.meta === "object"
-                  ? (message.meta as Record<string, unknown>)
-                  : null;
-              const topReasons = Array.isArray(meta?.topReasons)
-                ? meta?.topReasons.map((item) => String(item))
-                : [];
-              const missingEvidence = Array.isArray(meta?.missingEvidence)
-                ? meta?.missingEvidence.map((item) => String(item))
-                : [];
-              return (
-                <div key={`${message.createdAt}-${message.clientId ?? index}`} className={`flex gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
-                  {!isUser ? (
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[color:var(--accent-soft)] text-[color:var(--accent)]">
-                      <Bot className="h-4 w-4" />
-                    </div>
-                  ) : null}
-                  <div className={`max-w-[84%] rounded-[1.5rem] px-4 py-3 text-sm leading-7 ${isUser ? "bg-[color:var(--text-strong)] text-[color:var(--background)]" : "border border-[color:var(--border)] bg-[color:var(--surface-strong)] text-[color:var(--text-soft)]"}`}>
-                    <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-[0.24em] opacity-70">
-                      {isUser ? <User className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
-                      {message.role}
-                      <span>{formatTimestamp(message.createdAt)}</span>
-                      {message.optimistic ? (
-                        <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[10px]">
-                          sending
-                        </span>
-                      ) : null}
-                    </div>
-                    <p>{meta?.summary ? String(meta.summary) : message.content}</p>
-                    {!isUser && meta ? (
-                      <details className="mt-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
-                        <summary className="cursor-pointer text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
-                          Reasoning details
-                        </summary>
-                        <div className="mt-2 space-y-2 text-xs leading-6">
-                          {typeof meta.verdict === "string" || typeof meta.trust === "number" ? (
-                            <p>
-                              Verdict: {String(meta.verdict || "pending")} | Trust:{" "}
-                              {typeof meta.trust === "number" ? meta.trust.toFixed(2) : "n/a"}
-                            </p>
-                          ) : null}
-                          {topReasons.length ? <p>Factors: {topReasons.join(" | ")}</p> : null}
-                          {missingEvidence.length ? <p>Missing: {missingEvidence.join(", ")}</p> : null}
-                        </div>
-                      </details>
-                    ) : null}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          <div className="mt-6 space-y-3">
-            <label className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">
-              {needsFollowUp ? "Resume blocked run" : "Refine the brief"}
-            </label>
-            <textarea
-              value={chatInput}
-              onChange={(event) => setChatInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  void sendChatMessage();
-                }
-              }}
-              placeholder={needsFollowUp ? "Example: prioritize verified sellers with free returns." : "Example: keep only options with 4.5+ stars and delivery this week."}
-              className="min-h-28 w-full rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm leading-7 text-[color:var(--text-strong)] outline-none transition placeholder:text-[color:var(--text-muted)] focus:border-[color:var(--accent)]"
-            />
-            <button type="button" onClick={() => void sendChatMessage()} disabled={!chatInput.trim() || sending || !activeSessionId} className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[color:var(--accent)] px-4 py-3 text-sm font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
-              {sending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              {needsFollowUp ? "Resume agent" : "Send follow-up"}
-            </button>
-            {error ? (
-              <div className="rounded-[1.4rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-300">
-                {error}
-              </div>
-            ) : null}
-          </div>
-        </aside>
       </div>
     </div>
   );
@@ -1074,3 +1075,4 @@ export default function ResultsPage() {
     </Suspense>
   );
 }
+
