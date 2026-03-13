@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import re
 import time
 import uuid
@@ -85,9 +86,31 @@ _OFF_TOPIC_HINTS = (
     "news",
 )
 
+_MARKETPLACE_CHALLENGE_MARKERS: dict[str, tuple[str, ...]] = {
+    "amazon": (
+        "enter the characters you see below",
+        "automated access to amazon data",
+        "to discuss automated access",
+    ),
+    "ebay": (
+        "pardon our interruption",
+        "please verify yourself to continue",
+    ),
+    "walmart": (
+        "robot or human",
+        "px-captcha",
+        "verify you are human",
+        "please complete the security check",
+    ),
+}
+
 
 def _normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
+
+
+def _decode_html_text(value: str) -> str:
+    return _normalize_text(html.unescape(value))
 
 
 def _is_relevant_supplement_text(text: str, query: str) -> bool:
@@ -105,6 +128,146 @@ def _extract_numeric_price(value: str) -> float | None:
         return float(match.group(1).replace(",", ""))
     except ValueError:
         return None
+
+
+def _is_product_label_noise(value: str) -> bool:
+    text = _decode_html_text(value).lower()
+    if not text:
+        return True
+    if re.fullmatch(r"[0-9][0-9,]*\s+ratings?", text):
+        return True
+    if re.fullmatch(r"[0-9]+\s+sizes?,\s+[0-9]+\s+flavors?", text):
+        return True
+    if re.fullmatch(r"options?:.*", text):
+        return True
+    if text.startswith("options:"):
+        return True
+    if text.startswith("sponsored"):
+        return True
+    if text.startswith("view sponsored information"):
+        return True
+    if text.startswith("visit the ") and text.endswith(" store"):
+        return True
+    if "shop on amazon" in text:
+        return True
+    if text.startswith("in ") and " sports nutrition " in f" {text} ":
+        return True
+    if text in {"global ratings", "ratings", "stars", "star"}:
+        return True
+    return False
+
+
+def _extract_rating_and_count(blob: str) -> tuple[float, int]:
+    rating_patterns = [
+        r'"averageRating"\s*:\s*([0-5](?:\.[0-9]+)?)',
+        r'"rating"\s*:\s*([0-5](?:\.[0-9]+)?)',
+        r'aria-label="([0-5](?:\.[0-9]+)?)\s*out of 5 stars"',
+        r'([0-5]\.[0-9])\s*out of 5 stars',
+        r'([0-5]\.[0-9])\s*out of 5',
+    ]
+    count_patterns: list[tuple[str, bool]] = [
+        (r'"ratingCount"\s*:\s*([0-9,]+)', True),
+        (r'"numberOfRatings"\s*:\s*([0-9,]+)', True),
+        (r'"numberOfReviews"\s*:\s*([0-9,]+)', True),
+        (r'aria-label="([0-9][0-9,]*)\s+ratings?"', False),
+        (r'([0-9,]+)\s+global ratings?', False),
+        (r'([0-9,]+)\s+ratings?', False),
+    ]
+
+    rating = 0.0
+    rating_count = 0
+    count_from_loose_pattern = False
+    for pattern in rating_patterns:
+        match = re.search(pattern, blob, re.IGNORECASE)
+        if match:
+            rating = _safe_float(match.group(1), 0.0)
+            break
+    for pattern, is_structured in count_patterns:
+        match = re.search(pattern, blob, re.IGNORECASE)
+        if match:
+            rating_count = _safe_int(match.group(1), 0)
+            count_from_loose_pattern = not is_structured
+            break
+    if rating <= 0 and count_from_loose_pattern:
+        rating_count = 0
+    return rating, rating_count
+
+
+def _extract_amazon_title(window: str) -> str:
+    patterns = [
+        r'<a[^>]+href="/[^"]*/dp/[A-Z0-9]{10}[^"]*"[^>]*>[\s\S]{0,500}?<span[^>]*>([^<]{10,420})</span>',
+        r'aria-label="(?:Sponsored Ad - )?([^"]{10,420})"',
+        r'<h2[^>]*>\s*<a[^>]*>\s*<span[^>]*>([^<]{10,320})</span>',
+        r'<span[^>]+class="[^"]*a-size-base-plus[^"]*"[^>]*>([^<]{10,320})</span>',
+        r'<span[^>]+class="[^"]*a-size-medium[^"]*"[^>]*>([^<]{10,320})</span>',
+        r'aria-label="([^"]{10,320})"',
+        r'alt="([^"]{10,320})"',
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, window, re.IGNORECASE):
+            candidate = _normalize_text(match.group(1))
+            if candidate and not _is_product_label_noise(candidate):
+                return candidate
+    return ""
+
+
+def _extract_amazon_price(window: str, fallback: float = 99.0) -> float:
+    price_patterns = (
+        r'"priceToPay"\s*:\s*\{\s*"price"\s*:\s*([0-9]+(?:\.[0-9]+)?)',
+        r'"price"\s*:\s*([0-9]+(?:\.[0-9]+)?)',
+        r'\$([0-9][0-9,]*(?:\.[0-9]{2})?)',
+    )
+    for pattern in price_patterns:
+        match = re.search(pattern, window, re.IGNORECASE)
+        if match:
+            extracted = _extract_numeric_price(match.group(1))
+            if extracted is not None and extracted > 0:
+                return extracted
+    return fallback
+
+
+def _extract_amazon_image_url(window: str) -> str | None:
+    patterns = (
+        r'(https://m\.media-amazon\.com/images/I/[^"]+\.(?:jpg|jpeg|png))',
+        r'src="(https://[^"]+\.(?:jpg|jpeg|png))"',
+    )
+    for pattern in patterns:
+        match = re.search(pattern, window, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _extract_amazon_result_windows(body: str) -> list[str]:
+    positions = [match.start() for match in re.finditer(r'data-component-type="s-search-result"', body)]
+    windows: list[str] = []
+    if not positions:
+        return windows
+    for idx, start in enumerate(positions):
+        end = positions[idx + 1] if idx + 1 < len(positions) else min(len(body), start + 24000)
+        windows.append(body[start:end])
+    return windows
+
+
+def _extract_amazon_card_href(window: str) -> str:
+    patterns = (
+        r'<a[^>]+href="(/[^"]*/dp/[A-Z0-9]{10}[^"]*)"[^>]*>[\s\S]{0,500}?<span[^>]*>[^<]{10,420}</span>',
+        r'href="(/[^"]*/dp/[A-Z0-9]{10}[^"]*)"',
+    )
+    for pattern in patterns:
+        match = re.search(pattern, window, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def _detect_marketplace_challenge(source: str, body: str) -> str | None:
+    lowered = body.lower()
+    markers = _MARKETPLACE_CHALLENGE_MARKERS.get(source, ())
+    for marker in markers:
+        if marker in lowered:
+            return marker
+    return None
 
 
 class DevRealtimeCollector:
@@ -343,39 +506,41 @@ class LiveRealtimeCollector:
             url = f"https://www.amazon.com/s?k={quote_plus(query)}"
             response = await self._client.get(url)
             body = response.text
-            product_urls = list(
-                dict.fromkeys(
-                    re.findall(r'href="(/[^"]*/dp/[A-Z0-9]{10}[^"]*)"', body)
+            challenge_marker = _detect_marketplace_challenge(source, body)
+            if challenge_marker:
+                result.missing_evidence.append("amazon.product_list")
+                result.blocked_sources.append(source)
+                result.trace.append(
+                    CollectorTraceEvent(
+                        source=source,
+                        step="collect_products",
+                        status="blocked",
+                        detail=f"Amazon anti-bot challenge detected ({challenge_marker}).",
+                        duration_ms=int((time.perf_counter() - started) * 1000),
+                    )
                 )
-            )
+                return
+            windows = _extract_amazon_result_windows(body)
             now = _now_iso()
             added = 0
-            for relative_url in product_urls:
-                full_url = f"https://www.amazon.com{relative_url.split('?')[0]}"
-                href_pos = body.find(relative_url)
-                window_start = max(0, href_pos - 700) if href_pos >= 0 else 0
-                window_end = min(len(body), href_pos + 1600) if href_pos >= 0 else len(body)
-                window = body[window_start:window_end]
+            seen_urls: set[str] = set()
+            for window in windows:
+                if "s-sponsored-label-marker" in window or "s-sponsored-label-info-icon" in window:
+                    continue
+                relative_url = _extract_amazon_card_href(window)
+                if not relative_url:
+                    continue
+                normalized_relative = relative_url.split("?", 1)[0]
+                normalized_relative = re.sub(r"/ref=.*$", "", normalized_relative).strip()
+                full_url = f"https://www.amazon.com{normalized_relative}"
+                if full_url in seen_urls:
+                    continue
+                seen_urls.add(full_url)
 
-                title_match = re.search(
-                    r'(?:alt|aria-label)="([^"]{10,280})"',
-                    window,
-                    re.IGNORECASE,
-                )
-                price_match = re.search(
-                    r'\$([0-9][0-9,]*(?:\.[0-9]{2})?)',
-                    window,
-                    re.IGNORECASE,
-                )
-                rating_match = re.search(r'([0-5]\.[0-9])\s*out of 5 stars', window)
-                count_match = re.search(r'([0-9,]+)\s+ratings?', window)
-                image_match = re.search(
-                    r'src="(https://[^"]+\.(?:jpg|jpeg|png))"',
-                    window,
-                    re.IGNORECASE,
-                )
+                title = _extract_amazon_title(window)
+                rating_value, rating_count_value = _extract_rating_and_count(window)
+                image_url = _extract_amazon_image_url(window)
 
-                title = _normalize_text(title_match.group(1)) if title_match else ""
                 if not title or not _is_relevant_supplement_text(title, query):
                     continue
 
@@ -383,10 +548,10 @@ class LiveRealtimeCollector:
                     ProductCandidateData(
                         source=source,
                         url=full_url,
-                        title=title[:280],
-                        price=_safe_float(price_match.group(1) if price_match else None, 99.0),
-                        avg_rating=_safe_float(rating_match.group(1) if rating_match else None, 0.0),
-                        rating_count=_safe_int(count_match.group(1) if count_match else None, 0),
+                        title=_decode_html_text(title)[:280],
+                        price=_extract_amazon_price(window, 99.0),
+                        avg_rating=rating_value,
+                        rating_count=rating_count_value,
                         shipping_eta="unknown",
                         return_policy="Amazon policy",
                         seller_info="Amazon marketplace",
@@ -394,15 +559,15 @@ class LiveRealtimeCollector:
                         evidence_id=f"amz-offer-{uuid.uuid4().hex[:10]}",
                         confidence_source=0.66,
                         raw_snapshot_ref=url,
-                        image_url=image_match.group(1) if image_match else None,
+                        image_url=image_url,
                     )
                 )
-                if image_match:
+                if image_url:
                     result.visuals.append(
                         VisualRecord(
                             source=source,
                             url=full_url,
-                            image_url=image_match.group(1),
+                            image_url=image_url,
                             caption=title[:180],
                             retrieved_at=now,
                             evidence_id=f"amz-img-{uuid.uuid4().hex[:10]}",
@@ -411,7 +576,7 @@ class LiveRealtimeCollector:
                         )
                     )
                 added += 1
-                if added >= 6:
+                if added >= 12:
                     break
 
             if added == 0:
@@ -547,6 +712,20 @@ class LiveRealtimeCollector:
             url = f"https://www.ebay.com/sch/i.html?_nkw={quote_plus(query)}"
             response = await self._client.get(url)
             body = response.text
+            challenge_marker = _detect_marketplace_challenge(source, body)
+            if challenge_marker:
+                result.missing_evidence.append("ebay.product_list")
+                result.blocked_sources.append(source)
+                result.trace.append(
+                    CollectorTraceEvent(
+                        source=source,
+                        step="collect_products",
+                        status="blocked",
+                        detail=f"eBay anti-bot challenge detected ({challenge_marker}).",
+                        duration_ms=int((time.perf_counter() - started) * 1000),
+                    )
+                )
+                return
             item_blocks = re.findall(
                 r'(<li[^>]+class="s-item[^"]*"[\s\S]*?</li>)',
                 body,
@@ -580,22 +759,17 @@ class LiveRealtimeCollector:
                     block,
                     re.IGNORECASE,
                 )
-                rating_match = re.search(
-                    r'([0-5]\.[0-9])\s*out of 5',
-                    block,
-                    re.IGNORECASE,
-                )
-                count_match = re.search(r'\(([0-9,]+)\)', block)
+                rating_value, rating_count_value = _extract_rating_and_count(block)
 
                 if not item_url_match:
                     continue
-                item_url = item_url_match.group(1)
+                item_url = item_url_match.group(1).split("?")[0]
                 title = (
                     _normalize_text(title_match.group(1))
                     if title_match
                     else f"eBay result for {query}"
                 )
-                if not title or "shop on ebay" in title.lower():
+                if not title or "shop on ebay" in title.lower() or _is_product_label_noise(title):
                     continue
                 if not _is_relevant_supplement_text(title, query):
                     continue
@@ -609,8 +783,8 @@ class LiveRealtimeCollector:
                         url=item_url,
                         title=title[:280],
                         price=_safe_float(raw_price.replace(",", "") if raw_price else None, 99.0),
-                        avg_rating=_safe_float(rating_match.group(1) if rating_match else None, 0.0),
-                        rating_count=_safe_int(count_match.group(1) if count_match else None, 0),
+                        avg_rating=rating_value,
+                        rating_count=rating_count_value,
                         shipping_eta=shipping_eta[:100],
                         return_policy="See seller listing",
                         seller_info="eBay seller",
@@ -649,6 +823,7 @@ class LiveRealtimeCollector:
                     )
                 )
                 for item_url in item_urls:
+                    item_url = item_url.split("?")[0]
                     idx = body.find(item_url)
                     window = body[max(0, idx - 900): min(len(body), idx + 1700)] if idx >= 0 else body
                     title_match = re.search(
@@ -667,7 +842,11 @@ class LiveRealtimeCollector:
                         re.IGNORECASE,
                     )
                     title = _normalize_text(title_match.group(1)) if title_match else ""
-                    if not title or not _is_relevant_supplement_text(title, query):
+                    if (
+                        not title
+                        or _is_product_label_noise(title)
+                        or not _is_relevant_supplement_text(title, query)
+                    ):
                         continue
                     result.products.append(
                         ProductCandidateData(
@@ -747,6 +926,20 @@ class LiveRealtimeCollector:
             url = f"https://www.walmart.com/search?q={quote_plus(query)}"
             response = await self._client.get(url)
             body = response.text
+            challenge_marker = _detect_marketplace_challenge(source, body)
+            if challenge_marker:
+                result.missing_evidence.append("walmart.product_list")
+                result.blocked_sources.append(source)
+                result.trace.append(
+                    CollectorTraceEvent(
+                        source=source,
+                        step="collect_products",
+                        status="blocked",
+                        detail=f"Walmart anti-bot challenge detected ({challenge_marker}).",
+                        duration_ms=int((time.perf_counter() - started) * 1000),
+                    )
+                )
+                return
             candidate_matches = re.findall(
                 r'"name":"([^"]{8,220})"[\s\S]{0,500}?"canonicalUrl":"(/ip/[^"]+)"[\s\S]{0,500}?"price":([0-9]+(?:\.[0-9]+)?)',
                 body,
@@ -770,7 +963,11 @@ class LiveRealtimeCollector:
                     rel_url, raw_price = match
                     title = f"Walmart result for {query}"
                 clean_title = _normalize_text(title)
-                if not clean_title or not _is_relevant_supplement_text(clean_title, query):
+                if (
+                    not clean_title
+                    or _is_product_label_noise(clean_title)
+                    or not _is_relevant_supplement_text(clean_title, query)
+                ):
                     continue
                 item_url = f"https://www.walmart.com{rel_url.split('?')[0]}"
                 idx = body.find(rel_url)
@@ -780,8 +977,7 @@ class LiveRealtimeCollector:
                     window,
                     re.IGNORECASE,
                 )
-                rating_match = re.search(r'"averageRating":([0-9]+(?:\.[0-9]+)?)', window)
-                count_match = re.search(r'"numberOfReviews":([0-9]+)', window)
+                rating_value, rating_count_value = _extract_rating_and_count(window)
 
                 result.products.append(
                     ProductCandidateData(
@@ -789,8 +985,8 @@ class LiveRealtimeCollector:
                         url=item_url,
                         title=clean_title[:280],
                         price=_safe_float(raw_price, 95.0),
-                        avg_rating=_safe_float(rating_match.group(1) if rating_match else None, 0.0),
-                        rating_count=_safe_int(count_match.group(1) if count_match else None, 0),
+                        avg_rating=rating_value,
+                        rating_count=rating_count_value,
                         shipping_eta="unknown",
                         return_policy="See Walmart listing",
                         seller_info="Walmart marketplace",
@@ -847,7 +1043,11 @@ class LiveRealtimeCollector:
                         re.IGNORECASE,
                     )
                     clean_title = _normalize_text(title_match.group(1)) if title_match else ""
-                    if not clean_title or not _is_relevant_supplement_text(clean_title, query):
+                    if (
+                        not clean_title
+                        or _is_product_label_noise(clean_title)
+                        or not _is_relevant_supplement_text(clean_title, query)
+                    ):
                         continue
                     item_url = f"https://www.walmart.com{rel_url.split('?')[0]}"
                     result.products.append(
