@@ -179,6 +179,13 @@ def test_session_products_endpoint_returns_ingredient_analysis(client: TestClien
     assert "ingredientAnalysis" in first
     assert isinstance(first["ingredientAnalysis"]["score"], int)
     assert first["ingredientAnalysis"]["references"]
+    assert "canonicalProductId" in first
+    assert "primaryOffer" in first
+    assert "offers" in first
+    assert isinstance(first["offers"], list)
+    assert len(first["offers"]) >= 1
+    assert "ratingCoverage" in first
+    assert first["ratingCoverage"]["totalOfferCount"] >= first["ratingCoverage"]["ratedOfferCount"]
     assert any(
         item["ingredient"] == "whey isolate"
         for product in payload["items"]

@@ -46,5 +46,11 @@ def test_chat_endpoint_persists_session_history(client: TestClient) -> None:
     assert "scientificScore" in decision
     assert "evidenceStats" in decision
     assert "coverageAudit" in decision
+    coverage = decision["coverageAudit"]
+    if coverage:
+        assert "commerceSourceCoverage" in coverage
+        assert "ratedCandidateCount" in coverage
+        assert "ratedCoverageRatio" in coverage
+        assert "blockedCommerceSources" in coverage
     if decision["status"] == "OK":
         assert decision["decision"] is not None

@@ -28,6 +28,10 @@ def test_recommendation_endpoint_returns_decision_payload(client: TestClient) ->
     assert payload["status"] in {"OK", "NEED_DATA"}
     assert "scientificScore" in payload
     assert "evidenceStats" in payload
+    assert "commerceSourceCoverage" in payload["coverageAudit"]
+    assert "ratedCandidateCount" in payload["coverageAudit"]
+    assert "ratedCoverageRatio" in payload["coverageAudit"]
+    assert "blockedCommerceSources" in payload["coverageAudit"]
     assert isinstance(payload["scientificScore"].get("finalTrust"), float | int)
     if payload["decision"] is not None:
         assert payload["decision"]["verdict"] in {"BUY", "WAIT", "AVOID"}

@@ -80,8 +80,31 @@ class IngredientAnalysisResponse(BaseModel):
     references: list[str]
 
 
+class OfferResponse(BaseModel):
+    source: str
+    store_name: str = Field(alias="storeName")
+    source_url: str = Field(alias="sourceUrl")
+    price: float
+    rating: float | None = None
+    rating_count: int = Field(alias="ratingCount")
+    shipping_eta: str = Field(alias="shippingETA")
+    return_policy: str = Field(alias="returnPolicy")
+    image_url: str | None = Field(default=None, alias="imageUrl")
+
+
+class SourceBreakdownItemResponse(BaseModel):
+    source: str
+    count: int
+
+
+class RatingCoverageResponse(BaseModel):
+    rated_offer_count: int = Field(alias="ratedOfferCount")
+    total_offer_count: int = Field(alias="totalOfferCount")
+
+
 class SessionProductResponse(BaseModel):
     product_id: str = Field(alias="productId")
+    canonical_product_id: str = Field(alias="canonicalProductId")
     title: str
     store_name: str = Field(alias="storeName")
     source: str
@@ -93,6 +116,10 @@ class SessionProductResponse(BaseModel):
     return_policy: str = Field(alias="returnPolicy")
     checkout_ready: bool = Field(alias="checkoutReady")
     evidence_refs: list[str] = Field(alias="evidenceRefs")
+    primary_offer: OfferResponse = Field(alias="primaryOffer")
+    offers: list[OfferResponse]
+    source_breakdown: list[SourceBreakdownItemResponse] = Field(alias="sourceBreakdown")
+    rating_coverage: RatingCoverageResponse = Field(alias="ratingCoverage")
     pros: list[str]
     cons: list[str]
     ingredient_analysis: IngredientAnalysisResponse = Field(alias="ingredientAnalysis")

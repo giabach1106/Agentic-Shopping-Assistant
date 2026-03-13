@@ -5,6 +5,7 @@ import re
 from datetime import UTC, datetime
 from statistics import mean
 from typing import Any
+from urllib.parse import urlparse
 
 from app.collectors.base import RealtimeCollector
 from app.core.config import Settings
@@ -52,6 +53,7 @@ _OFF_TOPIC_PRODUCT_HINTS = (
     "laptop",
     "chair",
 )
+_COMMERCE_SOURCES = {"amazon", "walmart", "ebay"}
 
 _GENERIC_CATEGORY_PHRASES = {
     "another",
@@ -80,6 +82,58 @@ _NOISE_TERMS = {
     "delivery",
     "delivered",
 }
+
+
+def _normalize_url_for_key(value: str) -> str:
+    trimmed = value.strip()
+    if not trimmed:
+        return ""
+    parsed = urlparse(trimmed)
+    normalized = parsed._replace(query="", fragment="")
+    clean_path = re.sub(r"/ref=.*$", "", normalized.path).rstrip("/")
+    normalized = normalized._replace(path=clean_path or "/")
+    return normalized.geturl()
+
+
+def _is_search_listing_url(value: str) -> bool:
+    lower = value.lower()
+    return ("/search?" in lower) or ("/sch/i.html" in lower)
+
+
+def _canonical_title_signature(title: str) -> str:
+    tokens = [
+        token
+        for token in re.split(r"[^a-z0-9]+", title.lower())
+        if len(token) >= 3
+        and token not in _NOISE_TERMS
+        and token
+    ]
+    if not tokens:
+        return ""
+    return " ".join(tokens[:8])
+
+
+def _is_product_title_noise(value: str) -> bool:
+    title = re.sub(r"\s+", " ", value).strip().lower()
+    if not title:
+        return True
+    if re.fullmatch(r"[0-9][0-9,]*\s+ratings?", title):
+        return True
+    if title.startswith("options:"):
+        return True
+    if title.startswith("sponsored"):
+        return True
+    if title in {"ratings", "global ratings", "stars", "star"}:
+        return True
+    return False
+
+
+def _canonical_product_key(title: str, source_url: str) -> str:
+    signature = _canonical_title_signature(title)
+    normalized_url = _normalize_url_for_key(source_url)
+    if signature:
+        return signature
+    return normalized_url
 
 
 def _tokenize_terms(value: str) -> list[str]:
@@ -114,6 +168,8 @@ def _constraint_focus_terms(constraints: dict[str, Any]) -> list[str]:
 
 def _is_candidate_title_relevant(title: str, constraints: dict[str, Any]) -> bool:
     lower = title.lower()
+    if _is_product_title_noise(lower):
+        return False
     if any(hint in lower for hint in _OFF_TOPIC_PRODUCT_HINTS):
         return False
     if not any(keyword in lower for keyword in _SUPPLEMENT_TITLE_KEYWORDS):
@@ -139,6 +195,83 @@ def _constraint_match_score(title: str, constraints: dict[str, Any]) -> int:
         if term in lower:
             score += 1
     return score
+
+
+def _sanitize_collection_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+
+    sanitized: dict[str, Any] = {}
+    products: list[dict[str, Any]] = []
+    for item in payload.get("products", []):
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        url = str(item.get("url") or "").strip()
+        if not title or _is_product_title_noise(title):
+            continue
+        if not url.startswith("http") or _is_search_listing_url(url):
+            continue
+        source = str(item.get("source") or "").strip().lower()
+        if not source:
+            continue
+
+        avg_rating = float(item.get("avg_rating") or item.get("avgRating") or 0.0)
+        if avg_rating < 0 or avg_rating > 5:
+            avg_rating = 0.0
+        rating_count = int(item.get("rating_count") or item.get("ratingCount") or 0)
+        rating_count = max(0, rating_count)
+        if avg_rating <= 0:
+            rating_count = 0
+
+        normalized = dict(item)
+        normalized["source"] = source
+        normalized["url"] = _normalize_url_for_key(url)
+        normalized["title"] = title
+        normalized["avg_rating"] = avg_rating
+        normalized["rating_count"] = rating_count
+        products.append(normalized)
+
+    reviews = [
+        dict(item)
+        for item in payload.get("reviews", [])
+        if isinstance(item, dict) and str(item.get("review_text") or "").strip()
+    ]
+    visuals = [
+        dict(item)
+        for item in payload.get("visuals", [])
+        if isinstance(item, dict)
+        and str(item.get("image_url") or item.get("imageUrl") or "").strip()
+    ]
+    trace = [
+        dict(item)
+        for item in payload.get("trace", [])
+        if isinstance(item, dict)
+    ]
+    missing = sorted(
+        {
+            str(item).strip()
+            for item in payload.get("missingEvidence", [])
+            if str(item).strip()
+        }
+    )
+    blocked = sorted(
+        {
+            str(item).strip().lower()
+            for item in payload.get("blockedSources", [])
+            if str(item).strip()
+        }
+    )
+
+    sanitized["products"] = products
+    sanitized["reviews"] = reviews
+    sanitized["visuals"] = visuals
+    sanitized["trace"] = trace
+    sanitized["missingEvidence"] = missing
+    sanitized["blockedSources"] = blocked
+    if not any([products, reviews, visuals, trace, missing, blocked]):
+        return {}
+    return sanitized
 
 
 class PlannerAgent:
@@ -471,8 +604,15 @@ class CoverageAuditorAgent:
 
     async def run(self, constraints: dict[str, Any]) -> dict[str, Any]:
         cached = await self._evidence_store.get_cached_collection(constraints)
-        cached_collection = dict(cached.get("collection") or {}) if cached else {}
+        raw_cached_collection = dict(cached.get("collection") or {}) if cached else {}
+        cached_collection = _sanitize_collection_payload(raw_cached_collection)
         cache_status = "hit" if cached_collection else "miss"
+        if cached and cached_collection != raw_cached_collection:
+            await self._evidence_store.upsert_cached_collection(
+                constraints,
+                cached_collection,
+                self._build_stats(cached_collection),
+            )
 
         query_parts = [str(constraints.get("category") or "").strip()]
         query_parts.extend(
@@ -486,19 +626,26 @@ class CoverageAuditorAgent:
         catalog_collection = self._catalog_records_to_collection(catalog_records)
         catalog_status = "hit" if catalog_records else "miss"
 
-        collection = self._merge_collections(cached_collection, catalog_collection)
+        collection = _sanitize_collection_payload(
+            self._merge_collections(cached_collection, catalog_collection)
+        )
         stats = self._build_stats(collection)
         sufficiency = self._evaluate_sufficiency(stats)
         source_coverage = self._compute_source_coverage(collection)
+        blocked_commerce_sources = self._blocked_commerce_sources(collection)
         return {
             "status": "OK" if sufficiency["isSufficient"] else "NEED_DATA",
             "cacheStatus": cache_status,
             "catalogStatus": catalog_status,
             "sufficiency": sufficiency,
             "sourceCoverage": source_coverage,
+            "commerceSourceCoverage": int(stats.get("commerceSourceCoverage", 0)),
             "reviewCount": int(stats.get("reviewCount", 0)),
             "ratingCount": int(stats.get("ratingCount", 0)),
+            "ratedCandidateCount": int(stats.get("ratedCandidateCount", 0)),
+            "ratedCoverageRatio": float(stats.get("ratedCoverageRatio", 0.0)),
             "freshnessSeconds": int(stats.get("freshnessSeconds", 999999)),
+            "blockedCommerceSources": blocked_commerce_sources,
             "collection": collection,
         }
 
@@ -524,9 +671,9 @@ class CoverageAuditorAgent:
         ]
         for item in records:
             source = str(item.get("source") or "unknown").strip().lower()
-            url = str(item.get("url") or "").strip()
+            url = _normalize_url_for_key(str(item.get("url") or "").strip())
             title = str(item.get("title") or "").strip()
-            if not url or not title:
+            if not url or not title or _is_product_title_noise(title):
                 continue
             retrieved_at = str(item.get("retrieved_at") or _now_iso())
             evidence_id = f"catalog::{hash(url)}"
@@ -674,9 +821,34 @@ class CoverageAuditorAgent:
                     sources.add(source)
         return len(sources)
 
+    def _compute_commerce_source_coverage(self, payload: dict[str, Any]) -> int:
+        sources: set[str] = set()
+        entries = payload.get("products")
+        if isinstance(entries, list):
+            for item in entries:
+                if not isinstance(item, dict):
+                    continue
+                source = str(item.get("source") or "").strip().lower()
+                if source in _COMMERCE_SOURCES:
+                    sources.add(source)
+        return len(sources)
+
+    def _blocked_commerce_sources(self, payload: dict[str, Any]) -> list[str]:
+        blocked = payload.get("blockedSources")
+        if not isinstance(blocked, list):
+            return []
+        return sorted(
+            {
+                str(item).strip().lower()
+                for item in blocked
+                if str(item).strip().lower() in _COMMERCE_SOURCES
+            }
+        )
+
     def _build_stats(self, payload: dict[str, Any]) -> dict[str, Any]:
         products = payload.get("products", []) if isinstance(payload.get("products"), list) else []
         reviews = payload.get("reviews", []) if isinstance(payload.get("reviews"), list) else []
+        blocked_commerce_sources = self._blocked_commerce_sources(payload)
         product_count = len([item for item in products if isinstance(item, dict)])
         review_count = len([item for item in reviews if isinstance(item, dict)])
         rating_count = sum(
@@ -684,27 +856,61 @@ class CoverageAuditorAgent:
             for item in products
             if isinstance(item, dict)
         )
+        rated_candidate_count = sum(
+            1
+            for item in products
+            if isinstance(item, dict)
+            and (
+                float(item.get("avg_rating") or item.get("avgRating") or 0.0) > 0
+                or int(item.get("rating_count") or item.get("ratingCount") or 0) > 0
+            )
+        )
+        commerce_source_coverage = self._compute_commerce_source_coverage(payload)
+        rated_coverage_ratio = (
+            round(rated_candidate_count / product_count, 4)
+            if product_count > 0
+            else 0.0
+        )
         freshness_seconds = self._freshness_seconds(payload)
         return {
             "sourceCoverage": self._compute_source_coverage(payload),
+            "commerceSourceCoverage": commerce_source_coverage,
             "productCount": product_count,
             "reviewCount": review_count,
             "ratingCount": rating_count,
+            "ratedCandidateCount": rated_candidate_count,
+            "ratedCoverageRatio": rated_coverage_ratio,
             "freshnessSeconds": freshness_seconds,
+            "blockedCommerceSources": blocked_commerce_sources,
         }
 
     def _evaluate_sufficiency(self, stats: dict[str, Any]) -> dict[str, Any]:
         missing: list[str] = []
-        source_coverage = int(stats.get("sourceCoverage", 0))
+        source_coverage = int(stats.get("commerceSourceCoverage", 0))
         product_count = int(stats.get("productCount", 0))
         review_count = int(stats.get("reviewCount", 0))
         rating_count = int(stats.get("ratingCount", 0))
+        rated_coverage_ratio = float(stats.get("ratedCoverageRatio", 0.0))
+        blocked_commerce_sources = [
+            str(item).strip().lower()
+            for item in (stats.get("blockedCommerceSources") or [])
+            if str(item).strip().lower() in _COMMERCE_SOURCES
+        ]
+        effective_source_coverage = source_coverage + len(blocked_commerce_sources)
         has_catalog_depth = (
             product_count >= 10
-            and source_coverage >= max(2, self._settings.min_source_coverage - 1)
+            and rated_coverage_ratio >= 0.6
         )
 
-        if source_coverage < self._settings.min_source_coverage:
+        if source_coverage < 1:
+            missing.append("sourceCoverage")
+        elif (
+            source_coverage == 1
+            and product_count < 10
+            and self._settings.min_source_coverage > 1
+        ):
+            missing.append("sourceCoverage")
+        elif effective_source_coverage < self._settings.min_source_coverage and not has_catalog_depth:
             missing.append("sourceCoverage")
         if not has_catalog_depth and review_count < self._settings.min_review_count:
             missing.append("reviewCount")
@@ -758,13 +964,20 @@ class EvidenceCollectionAgent:
         coverage_audit: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         cached = await self._evidence_store.get_cached_collection(constraints)
-        cached_collection = dict(cached.get("collection") or {}) if cached else {}
+        raw_cached_collection = dict(cached.get("collection") or {}) if cached else {}
+        cached_collection = _sanitize_collection_payload(raw_cached_collection)
         cached_stats = dict(cached.get("stats") or {}) if cached else {}
+        if cached and cached_collection != raw_cached_collection:
+            await self._evidence_store.upsert_cached_collection(
+                constraints,
+                cached_collection,
+                self._build_stats(cached_collection),
+            )
 
-        collection = self._merge_collections(
-            dict(seed_collection or {}),
+        collection = _sanitize_collection_payload(self._merge_collections(
+            _sanitize_collection_payload(dict(seed_collection or {})),
             dict(cached_collection or {}),
-        )
+        ))
         stats = self._build_stats(collection) if collection else dict(cached_stats)
         sufficiency = dict((coverage_audit or {}).get("sufficiency") or {})
         if not sufficiency:
@@ -776,8 +989,8 @@ class EvidenceCollectionAgent:
 
         if not sufficiency["isSufficient"]:
             result = await self._collector.collect(constraints)
-            fresh_payload = result.to_public_dict()
-            collection = self._merge_collections(collection, fresh_payload)
+            fresh_payload = _sanitize_collection_payload(result.to_public_dict())
+            collection = _sanitize_collection_payload(self._merge_collections(collection, fresh_payload))
             stats = self._build_stats(collection)
             sufficiency = self._evaluate_sufficiency(stats)
             await self._evidence_store.upsert_cached_collection(constraints, collection, stats)
@@ -785,6 +998,7 @@ class EvidenceCollectionAgent:
             crawl_performed = True
 
         source_coverage = self._compute_source_coverage(collection)
+        blocked_commerce_sources = self._blocked_commerce_sources(collection)
         missing_evidence = self._normalize_missing_evidence(collection)
         if not sufficiency["isSufficient"]:
             missing_evidence.extend(str(item) for item in sufficiency["missing"])
@@ -795,11 +1009,15 @@ class EvidenceCollectionAgent:
         return {
             "status": status,
             "sourceCoverage": source_coverage,
+            "commerceSourceCoverage": int(stats.get("commerceSourceCoverage", 0)),
             "reviewCount": int(stats.get("reviewCount", 0)),
             "ratingCount": int(stats.get("ratingCount", 0)),
+            "ratedCandidateCount": int(stats.get("ratedCandidateCount", 0)),
+            "ratedCoverageRatio": float(stats.get("ratedCoverageRatio", 0.0)),
             "freshnessSeconds": int(stats.get("freshnessSeconds", 999999)),
             "missingEvidence": missing_evidence,
             "blockedSources": collection.get("blockedSources", []),
+            "blockedCommerceSources": blocked_commerce_sources,
             "collection": collection,
             "cacheStatus": cache_status,
             "catalogStatus": catalog_status,
@@ -809,9 +1027,13 @@ class EvidenceCollectionAgent:
                 "isSufficient": bool(sufficiency.get("isSufficient")),
                 "missing": [str(item) for item in sufficiency.get("missing", [])],
                 "sourceCoverage": source_coverage,
+                "commerceSourceCoverage": int(stats.get("commerceSourceCoverage", 0)),
                 "reviewCount": int(stats.get("reviewCount", 0)),
                 "ratingCount": int(stats.get("ratingCount", 0)),
+                "ratedCandidateCount": int(stats.get("ratedCandidateCount", 0)),
+                "ratedCoverageRatio": float(stats.get("ratedCoverageRatio", 0.0)),
                 "freshnessSeconds": int(stats.get("freshnessSeconds", 999999)),
+                "blockedCommerceSources": blocked_commerce_sources,
                 "cacheStatus": cache_status,
                 "catalogStatus": catalog_status,
                 "crawlPerformed": crawl_performed,
@@ -832,6 +1054,30 @@ class EvidenceCollectionAgent:
                     sources.add(source)
         return len(sources)
 
+    def _compute_commerce_source_coverage(self, payload: dict[str, Any]) -> int:
+        sources: set[str] = set()
+        entries = payload.get("products")
+        if isinstance(entries, list):
+            for item in entries:
+                if not isinstance(item, dict):
+                    continue
+                source = str(item.get("source") or "").strip().lower()
+                if source in _COMMERCE_SOURCES:
+                    sources.add(source)
+        return len(sources)
+
+    def _blocked_commerce_sources(self, payload: dict[str, Any]) -> list[str]:
+        blocked = payload.get("blockedSources")
+        if not isinstance(blocked, list):
+            return []
+        return sorted(
+            {
+                str(item).strip().lower()
+                for item in blocked
+                if str(item).strip().lower() in _COMMERCE_SOURCES
+            }
+        )
+
     def _normalize_missing_evidence(self, payload: dict[str, Any]) -> list[str]:
         missing = list(payload.get("missingEvidence") or [])
         product_sources = {
@@ -841,7 +1087,7 @@ class EvidenceCollectionAgent:
         }
         # Product-list requirements are source-agnostic: if at least one
         # commerce source yielded products, don't block on per-source misses.
-        if product_sources:
+        if product_sources.intersection(_COMMERCE_SOURCES):
             missing = [item for item in missing if not str(item).endswith(".product_list")]
         return missing
 
@@ -919,27 +1165,66 @@ class EvidenceCollectionAgent:
     def _build_stats(self, payload: dict[str, Any]) -> dict[str, Any]:
         products = payload.get("products", []) if isinstance(payload.get("products"), list) else []
         reviews = payload.get("reviews", []) if isinstance(payload.get("reviews"), list) else []
+        blocked_commerce_sources = self._blocked_commerce_sources(payload)
+        product_count = len([item for item in products if isinstance(item, dict)])
         review_count = len([item for item in reviews if isinstance(item, dict)])
         rating_count = sum(
             int(item.get("rating_count") or item.get("ratingCount") or 0)
             for item in products
             if isinstance(item, dict)
         )
+        rated_candidate_count = sum(
+            1
+            for item in products
+            if isinstance(item, dict)
+            and (
+                float(item.get("avg_rating") or item.get("avgRating") or 0.0) > 0
+                or int(item.get("rating_count") or item.get("ratingCount") or 0) > 0
+            )
+        )
+        rated_coverage_ratio = (
+            round(rated_candidate_count / product_count, 4)
+            if product_count > 0
+            else 0.0
+        )
         freshness_seconds = self._freshness_seconds(payload)
         return {
             "sourceCoverage": self._compute_source_coverage(payload),
+            "commerceSourceCoverage": self._compute_commerce_source_coverage(payload),
+            "productCount": product_count,
             "reviewCount": review_count,
             "ratingCount": rating_count,
+            "ratedCandidateCount": rated_candidate_count,
+            "ratedCoverageRatio": rated_coverage_ratio,
             "freshnessSeconds": freshness_seconds,
+            "blockedCommerceSources": blocked_commerce_sources,
         }
 
     def _evaluate_sufficiency(self, stats: dict[str, Any]) -> dict[str, Any]:
         missing: list[str] = []
-        if int(stats.get("sourceCoverage", 0)) < self._settings.min_source_coverage:
+        source_coverage = int(stats.get("commerceSourceCoverage", 0))
+        product_count = int(stats.get("productCount", 0))
+        rated_coverage_ratio = float(stats.get("ratedCoverageRatio", 0.0))
+        blocked_commerce_sources = [
+            str(item).strip().lower()
+            for item in (stats.get("blockedCommerceSources") or [])
+            if str(item).strip().lower() in _COMMERCE_SOURCES
+        ]
+        effective_source_coverage = source_coverage + len(blocked_commerce_sources)
+        has_catalog_depth = product_count >= 10 and rated_coverage_ratio >= 0.6
+        if source_coverage < 1:
             missing.append("sourceCoverage")
-        if int(stats.get("reviewCount", 0)) < self._settings.min_review_count:
+        elif (
+            source_coverage == 1
+            and product_count < 10
+            and self._settings.min_source_coverage > 1
+        ):
+            missing.append("sourceCoverage")
+        elif effective_source_coverage < self._settings.min_source_coverage and not has_catalog_depth:
+            missing.append("sourceCoverage")
+        if not has_catalog_depth and int(stats.get("reviewCount", 0)) < self._settings.min_review_count:
             missing.append("reviewCount")
-        if int(stats.get("ratingCount", 0)) < self._settings.min_rating_count:
+        if not has_catalog_depth and int(stats.get("ratingCount", 0)) < self._settings.min_rating_count:
             missing.append("ratingCount")
         if int(stats.get("freshnessSeconds", 999999)) > (self._settings.evidence_freshness_minutes * 60):
             missing.append("freshness")
@@ -1223,8 +1508,9 @@ class PriceLogisticsAgent:
         )
 
         source_priority = {"amazon": 0, "walmart": 1, "ebay": 2}
-        ranked_candidates: list[tuple[int, float, float, int, dict[str, Any]]] = []
+        ranked_candidates: list[tuple[tuple[int, float, float, int], dict[str, Any]]] = []
         candidates: list[dict[str, Any]] = []
+        best_candidate_by_key: dict[str, tuple[tuple[int, float, float, int], dict[str, Any]]] = {}
         budget_max = constraints.get("budgetMax")
         try:
             budget_limit = float(budget_max) if budget_max is not None else None
@@ -1242,8 +1528,7 @@ class PriceLogisticsAgent:
                 url = str(item.get("url") or "").strip()
                 if not url.startswith("http"):
                     continue
-                lower_url = url.lower()
-                if "/sch/i.html" in lower_url or "/search?" in lower_url:
+                if _is_search_listing_url(url):
                     continue
                 title = str(item.get("title") or "").strip()
                 if not title or title.lower().startswith("unknown"):
@@ -1262,39 +1547,67 @@ class PriceLogisticsAgent:
                 match_score = _constraint_match_score(title, constraints)
                 if match_score <= 0:
                     continue
-                candidates.append(
-                    {
-                        "title": title,
-                        "sourceUrl": url,
-                        "price": price,
-                        "rating": rating,
-                        "shippingETA": str(item.get("shipping_eta") or "unknown"),
-                        "returnPolicy": str(item.get("return_policy") or "unknown"),
-                        "checkoutReady": False,
-                        "evidenceRefs": [str(item.get("evidence_id") or "")],
-                    }
+                normalized_url = _normalize_url_for_key(url)
+                canonical_key = _canonical_product_key(title, normalized_url)
+                rating_for_sort = rating if rating > 0 else 0.0
+                rank_key = (
+                    -match_score,
+                    -rating_for_sort,
+                    price,
+                    source_priority.get(source, 99),
                 )
-                ranked_candidates.append(
-                    (
-                        -match_score,
-                        -rating,
-                        price,
-                        source_priority.get(source, 99),
-                        candidates[-1],
-                    )
-                )
+                candidate = {
+                    "title": title,
+                    "sourceUrl": normalized_url or url,
+                    "price": price,
+                    "rating": rating if rating > 0 else None,
+                    "shippingETA": str(item.get("shipping_eta") or "unknown"),
+                    "returnPolicy": str(item.get("return_policy") or "unknown"),
+                    "checkoutReady": False,
+                    "evidenceRefs": [str(item.get("evidence_id") or "").strip()],
+                }
+                existing = best_candidate_by_key.get(canonical_key)
+                if existing is None or rank_key < existing[0]:
+                    if existing is not None:
+                        existing_refs = existing[1].get("evidenceRefs", [])
+                        merged_refs = [
+                            *[
+                                ref
+                                for ref in candidate["evidenceRefs"]
+                                if ref and ref not in existing_refs
+                            ],
+                            *[ref for ref in existing_refs if ref],
+                        ]
+                        candidate["evidenceRefs"] = merged_refs
+                    best_candidate_by_key[canonical_key] = (rank_key, candidate)
+                elif existing is not None:
+                    existing_refs = existing[1].get("evidenceRefs", [])
+                    for ref in candidate["evidenceRefs"]:
+                        if ref and ref not in existing_refs:
+                            existing_refs.append(ref)
+                    existing[1]["evidenceRefs"] = existing_refs
 
-        if ranked_candidates:
-            candidates = [
-                item
-                for _, _, _, _, item in sorted(
-                    ranked_candidates,
-                    key=lambda entry: (entry[0], entry[1], entry[2], entry[3]),
-                )
-            ][:10]
+        if best_candidate_by_key:
+            ranked_candidates = sorted(
+                best_candidate_by_key.values(),
+                key=lambda entry: entry[0],
+            )
+            candidates = [item for _, item in ranked_candidates][:10]
 
         if self._runtime_mode != "prod" and len(candidates) == 0:
-            candidates = execution_result.to_public_dict().get("candidates", [])
+            fallback_candidates = execution_result.to_public_dict().get("candidates", [])
+            deduped_fallback: dict[str, dict[str, Any]] = {}
+            for item in fallback_candidates:
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("title") or "").strip()
+                source_url = str(item.get("sourceUrl") or "").strip()
+                if not title or not source_url:
+                    continue
+                key = _canonical_product_key(title, source_url)
+                if key not in deduped_fallback:
+                    deduped_fallback[key] = item
+            candidates = list(deduped_fallback.values())[:10]
 
         blockers = list(execution_result.blockers)
         if self._runtime_mode == "prod" and self._ui_executor_backend == "mock":

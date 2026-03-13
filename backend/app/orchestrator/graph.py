@@ -205,13 +205,17 @@ class AgentOrchestrator:
         updated_outputs["collect"] = {
             "status": audit_output.get("status", "OK"),
             "sourceCoverage": audit_output.get("sourceCoverage", 0),
+            "commerceSourceCoverage": audit_output.get("commerceSourceCoverage", 0),
             "reviewCount": audit_output.get("reviewCount", 0),
             "ratingCount": audit_output.get("ratingCount", 0),
+            "ratedCandidateCount": audit_output.get("ratedCandidateCount", 0),
+            "ratedCoverageRatio": audit_output.get("ratedCoverageRatio", 0.0),
             "freshnessSeconds": audit_output.get("freshnessSeconds", 999999),
             "missingEvidence": list(
                 (audit_output.get("sufficiency") or {}).get("missing", [])
             ),
-            "blockedSources": [],
+            "blockedSources": list(audit_output.get("collection", {}).get("blockedSources", [])),
+            "blockedCommerceSources": list(audit_output.get("blockedCommerceSources", [])),
             "collection": dict(audit_output.get("collection", {})),
             "cacheStatus": audit_output.get("cacheStatus"),
             "catalogStatus": audit_output.get("catalogStatus"),
@@ -225,9 +229,13 @@ class AgentOrchestrator:
                     (audit_output.get("sufficiency") or {}).get("missing", [])
                 ),
                 "sourceCoverage": audit_output.get("sourceCoverage", 0),
+                "commerceSourceCoverage": audit_output.get("commerceSourceCoverage", 0),
                 "reviewCount": audit_output.get("reviewCount", 0),
                 "ratingCount": audit_output.get("ratingCount", 0),
+                "ratedCandidateCount": audit_output.get("ratedCandidateCount", 0),
+                "ratedCoverageRatio": audit_output.get("ratedCoverageRatio", 0.0),
                 "freshnessSeconds": audit_output.get("freshnessSeconds", 999999),
+                "blockedCommerceSources": list(audit_output.get("blockedCommerceSources", [])),
                 "cacheStatus": audit_output.get("cacheStatus"),
                 "catalogStatus": audit_output.get("catalogStatus"),
                 "crawlPerformed": False,

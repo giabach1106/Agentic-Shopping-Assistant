@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import base64
+import re
 import hashlib
 import json
 import time
+from collections import defaultdict
 from typing import Any
 from urllib.parse import urlparse
 
@@ -89,7 +91,7 @@ def _normalize_url(value: str) -> str:
         return ""
     parsed = urlparse(trimmed)
     normalized = parsed._replace(query="", fragment="")
-    path = normalized.path.rstrip("/")
+    path = re.sub(r"/ref=.*$", "", normalized.path).rstrip("/")
     normalized = normalized._replace(path=path or "/")
     return normalized.geturl()
 
@@ -101,6 +103,59 @@ def _store_name_from_url(value: str) -> str:
     if host:
         return host.split(":")[0]
     return "Marketplace"
+
+
+def _is_search_listing_url(value: str) -> bool:
+    lower = value.lower()
+    return ("/search?" in lower) or ("/sch/i.html" in lower)
+
+
+def _canonical_title_signature(value: str) -> str:
+    tokens = [
+        token
+        for token in re.split(r"[^a-z0-9]+", value.lower())
+        if len(token) >= 3 and token not in {"with", "from", "under", "over", "for"}
+    ]
+    if not tokens:
+        return ""
+    return " ".join(tokens[:8])
+
+
+def _canonical_product_key(title: str, source_url: str) -> str:
+    signature = _canonical_title_signature(title)
+    normalized_url = _normalize_url(source_url)
+    return signature or normalized_url
+
+
+def _source_priority(source: str) -> int:
+    mapping = {"amazon": 0, "walmart": 1, "ebay": 2}
+    return mapping.get(source.lower(), 99)
+
+
+def _safe_float(value: Any, fallback: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _safe_int(value: Any, fallback: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _offer_sort_key(offer: dict[str, Any]) -> tuple[int, int, int, float, float]:
+    rating_count = _safe_int(offer.get("ratingCount"), 0)
+    rating_value = _safe_float(offer.get("rating"), 0.0)
+    return (
+        _source_priority(str(offer.get("source") or "")),
+        0 if rating_count > 0 else 1,
+        -rating_count,
+        -rating_value,
+        _safe_float(offer.get("price"), 999999.0),
+    )
 
 
 def _build_session_products(checkpoint: dict[str, Any], services: ServiceContainer) -> dict[str, Any]:
@@ -115,12 +170,38 @@ def _build_session_products(checkpoint: dict[str, Any], services: ServiceContain
         if isinstance(item, dict) and str(item.get("review_text") or "").strip()
     ]
     collect_lookup: dict[str, dict[str, Any]] = {}
+    offers_by_key: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for item in collection.get("products", []):
         if not isinstance(item, dict):
             continue
         url = _normalize_url(str(item.get("url") or ""))
         if url:
             collect_lookup[url] = item
+        if not url.startswith("http") or _is_search_listing_url(url):
+            continue
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        price_value = _safe_float(item.get("price"), 0.0)
+        if price_value <= 0:
+            continue
+        source_name = str(item.get("source") or "").strip().lower() or _store_name_from_url(url)
+        rating_value = _safe_float(item.get("avg_rating") or item.get("rating"), 0.0)
+        rating_count = _safe_int(item.get("rating_count") or item.get("ratingCount"), 0)
+        offer = {
+            "source": source_name,
+            "storeName": str(item.get("seller_info") or "").strip() or source_name,
+            "sourceUrl": url,
+            "price": price_value,
+            "rating": rating_value if rating_value > 0 else None,
+            "ratingCount": rating_count,
+            "shippingETA": str(item.get("shipping_eta") or "unknown"),
+            "returnPolicy": str(item.get("return_policy") or "unknown"),
+            "imageUrl": str(item.get("image_url") or item.get("imageUrl") or "").strip() or None,
+        }
+        canonical_key = _canonical_product_key(title, url)
+        if canonical_key:
+            offers_by_key[canonical_key].append(offer)
 
     visual_lookup: dict[str, str] = {}
     for item in collection.get("visuals", []):
@@ -132,11 +213,22 @@ def _build_session_products(checkpoint: dict[str, Any], services: ServiceContain
             visual_lookup[url] = image_url
 
     items: list[dict[str, Any]] = []
+    seen_canonical_ids: set[str] = set()
     for candidate in price.get("candidates", []):
         if not isinstance(candidate, dict):
             continue
         source_url = str(candidate.get("sourceUrl") or "").strip()
         normalized_source_url = _normalize_url(source_url)
+        if not normalized_source_url.startswith("http") or _is_search_listing_url(normalized_source_url):
+            continue
+        title = str(candidate.get("title") or "").strip()
+        if not title:
+            continue
+        canonical_key = _canonical_product_key(title, normalized_source_url)
+        canonical_product_id = hashlib.sha1(canonical_key.encode("utf-8")).hexdigest()[:16]
+        if canonical_product_id in seen_canonical_ids:
+            continue
+        seen_canonical_ids.add(canonical_product_id)
         collect_item = collect_lookup.get(normalized_source_url, {})
         evidence_refs = [
             str(item).strip()
@@ -144,37 +236,119 @@ def _build_session_products(checkpoint: dict[str, Any], services: ServiceContain
             if str(item).strip()
         ]
         analysis = services.ingredient_analyzer.analyze(
-            title=str(candidate.get("title") or ""),
+            title=title,
             description=" ".join(str(item) for item in review.get("pros", [])[:2]),
             review_texts=review_texts,
             evidence_refs=evidence_refs,
-            source_url=source_url,
+            source_url=normalized_source_url,
         )
+        source_name = str(collect_item.get("source") or "").strip().lower() or _store_name_from_url(normalized_source_url)
         store_name = (
             str(collect_item.get("seller_info") or "").strip()
-            or str(collect_item.get("source") or "").strip()
-            or _store_name_from_url(source_url)
+            or source_name
+            or _store_name_from_url(normalized_source_url)
         )
-        source_name = str(collect_item.get("source") or "").strip() or _store_name_from_url(source_url)
         image_url = str(
             collect_item.get("image_url")
             or collect_item.get("imageUrl")
             or visual_lookup.get(normalized_source_url, "")
         ).strip()
+        candidate_rating = _safe_float(candidate.get("rating"), 0.0)
+        primary_offer = {
+            "source": source_name,
+            "storeName": store_name,
+            "sourceUrl": normalized_source_url,
+            "price": _safe_float(candidate.get("price"), 0.0),
+            "rating": candidate_rating if candidate_rating > 0 else None,
+            "ratingCount": _safe_int(collect_item.get("rating_count") or collect_item.get("ratingCount"), 0),
+            "shippingETA": str(candidate.get("shippingETA") or "unknown"),
+            "returnPolicy": str(candidate.get("returnPolicy") or "unknown"),
+            "imageUrl": image_url or None,
+        }
+        offer_by_url: dict[str, dict[str, Any]] = {}
+        for offer in [primary_offer, *offers_by_key.get(canonical_key, [])]:
+            offer_url = _normalize_url(str(offer.get("sourceUrl") or ""))
+            if not offer_url:
+                continue
+            if _is_search_listing_url(offer_url):
+                continue
+            offer["sourceUrl"] = offer_url
+            existing_offer = offer_by_url.get(offer_url)
+            if existing_offer is None:
+                offer_by_url[offer_url] = offer
+                continue
+            existing_rating_count = _safe_int(existing_offer.get("ratingCount"), 0)
+            next_rating_count = _safe_int(offer.get("ratingCount"), 0)
+            existing_rating = _safe_float(existing_offer.get("rating"), 0.0)
+            next_rating = _safe_float(offer.get("rating"), 0.0)
+            if (
+                next_rating_count > existing_rating_count
+                or (next_rating_count == existing_rating_count and next_rating > existing_rating)
+            ):
+                merged = dict(existing_offer)
+                merged.update(offer)
+                offer_by_url[offer_url] = merged
+            elif not existing_offer.get("imageUrl") and offer.get("imageUrl"):
+                existing_offer["imageUrl"] = offer["imageUrl"]
+
+        merged_offers = list(offer_by_url.values())
+        merged_offers.sort(key=_offer_sort_key)
+        primary_offer = (
+            next(
+                (offer for offer in merged_offers if offer.get("sourceUrl") == normalized_source_url),
+                None,
+            )
+            or (merged_offers[0] if merged_offers else primary_offer)
+        )
+        if merged_offers and primary_offer in merged_offers:
+            merged_offers = [primary_offer, *[item for item in merged_offers if item is not primary_offer]]
+        source_breakdown_counter: dict[str, int] = {}
+        for offer in merged_offers:
+            source = str(offer.get("source") or "unknown")
+            source_breakdown_counter[source] = source_breakdown_counter.get(source, 0) + 1
+        rated_offer_count = sum(
+            1
+            for offer in merged_offers
+            if (_safe_float(offer.get("rating"), 0.0) > 0)
+            or (_safe_int(offer.get("ratingCount"), 0) > 0)
+        )
+        total_offer_count = len(merged_offers)
+        unique_refs: list[str] = []
+        for ref in evidence_refs:
+            if ref and ref not in unique_refs:
+                unique_refs.append(ref)
         items.append(
             {
-                "productId": _product_id(source_url, evidence_refs),
-                "title": candidate.get("title"),
-                "storeName": store_name,
-                "source": source_name,
-                "sourceUrl": source_url,
-                "imageUrl": image_url or None,
-                "price": candidate.get("price"),
-                "rating": candidate.get("rating"),
-                "shippingETA": candidate.get("shippingETA"),
-                "returnPolicy": candidate.get("returnPolicy"),
+                "productId": _product_id(canonical_key, unique_refs),
+                "canonicalProductId": canonical_product_id,
+                "title": title,
+                "storeName": str(primary_offer.get("storeName") or store_name),
+                "source": str(primary_offer.get("source") or source_name),
+                "sourceUrl": str(primary_offer.get("sourceUrl") or normalized_source_url),
+                "imageUrl": primary_offer.get("imageUrl") or None,
+                "price": _safe_float(primary_offer.get("price"), 0.0),
+                "rating": (
+                    _safe_float(primary_offer.get("rating"), 0.0)
+                    if _safe_float(primary_offer.get("rating"), 0.0) > 0
+                    else None
+                ),
+                "shippingETA": str(primary_offer.get("shippingETA") or "unknown"),
+                "returnPolicy": str(primary_offer.get("returnPolicy") or "unknown"),
                 "checkoutReady": candidate.get("checkoutReady", False),
-                "evidenceRefs": evidence_refs,
+                "evidenceRefs": unique_refs,
+                "primaryOffer": primary_offer,
+                "offers": merged_offers,
+                "sourceBreakdown": [
+                    {"source": source, "count": count}
+                    for source, count in sorted(
+                        source_breakdown_counter.items(),
+                        key=lambda entry: (_source_priority(entry[0]), -entry[1], entry[0]),
+                    )
+                ],
+                "ratingCoverage": {
+                    "ratedOfferCount": rated_offer_count,
+                    "totalOfferCount": total_offer_count,
+                },
                 "pros": [str(item) for item in review.get("pros", [])[:4]],
                 "cons": [str(item) for item in review.get("cons", [])[:4]],
                 "ingredientAnalysis": analysis,
