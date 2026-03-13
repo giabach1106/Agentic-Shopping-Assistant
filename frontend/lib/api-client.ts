@@ -23,21 +23,95 @@ export class ApiError extends Error {
   }
 }
 
+function addCandidate(candidates: string[], value: string | null | undefined) {
+  if (!value) {
+    return;
+  }
+  const normalized = value.replace(/\/+$/, "");
+  if (!normalized) {
+    return;
+  }
+  if (!candidates.includes(normalized)) {
+    candidates.push(normalized);
+  }
+}
+
+function inferSiblingApiBase(originOrBase: string) {
+  try {
+    const parsed = new URL(originOrBase);
+    const host = parsed.hostname.toLowerCase();
+    if (!host.startsWith("app.")) {
+      return null;
+    }
+    const siblingHost = `api.${host.slice(4)}`;
+    const portSegment = parsed.port ? `:${parsed.port}` : "";
+    return `${parsed.protocol}//${siblingHost}${portSegment}`;
+  } catch {
+    return null;
+  }
+}
+
 function resolveApiBaseCandidates() {
   const configuredBase =
     getRuntimeConfigValue("NEXT_PUBLIC_API_BASE_URL")?.replace(/\/+$/, "") ||
     "http://localhost:8000";
-  const candidates = [configuredBase];
+  const candidates: string[] = [];
+  addCandidate(candidates, configuredBase);
+  addCandidate(candidates, inferSiblingApiBase(configuredBase));
 
   if (typeof window === "undefined") {
     return candidates;
   }
 
   const sameOriginBase = `${window.location.origin.replace(/\/+$/, "")}/api`;
-  if (!candidates.includes(sameOriginBase)) {
-    candidates.push(sameOriginBase);
-  }
+  addCandidate(candidates, sameOriginBase);
+  addCandidate(candidates, inferSiblingApiBase(window.location.origin));
   return candidates;
+}
+
+function looksLikeHtmlResponse(raw: string, contentType: string | null) {
+  const normalizedType = (contentType || "").toLowerCase();
+  if (normalizedType.includes("text/html")) {
+    return true;
+  }
+  const snippet = raw.trim().slice(0, 80).toLowerCase();
+  return snippet.startsWith("<!doctype html") || snippet.startsWith("<html");
+}
+
+function buildErrorMessage(
+  status: number,
+  requestUrl: string,
+  raw: string,
+  contentType: string | null
+) {
+  try {
+    const parsed = JSON.parse(raw) as { detail?: string };
+    if (typeof parsed.detail === "string" && parsed.detail.trim()) {
+      return parsed.detail;
+    }
+  } catch {
+    // Fallback to plain-text handling below.
+  }
+
+  if (looksLikeHtmlResponse(raw, contentType)) {
+    return `Unexpected HTML response from ${requestUrl} (HTTP ${status}). API requests are likely routed to the frontend. Verify Caddy /api reverse_proxy.`;
+  }
+
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return `Request failed: ${status}`;
+  }
+  if (trimmed.length > 240) {
+    return `${trimmed.slice(0, 240)}...`;
+  }
+  return trimmed;
+}
+
+function shouldRetryOnHttpError(status: number, raw: string, contentType: string | null) {
+  if (!looksLikeHtmlResponse(raw, contentType)) {
+    return false;
+  }
+  return status === 404 || status === 405 || status >= 500;
 }
 
 async function request<T>(
@@ -60,9 +134,11 @@ async function request<T>(
   }
 
   let lastNetworkError: unknown = null;
-  for (const apiBaseUrl of apiBaseCandidates) {
+  for (let index = 0; index < apiBaseCandidates.length; index += 1) {
+    const apiBaseUrl = apiBaseCandidates[index];
+    const requestUrl = `${apiBaseUrl}${path}`;
     try {
-      const response = await fetch(`${apiBaseUrl}${path}`, {
+      const response = await fetch(requestUrl, {
         ...init,
         headers,
         body: init.bodyJson ? JSON.stringify(init.bodyJson) : init.body,
@@ -70,18 +146,15 @@ async function request<T>(
 
       if (!response.ok) {
         const raw = await response.text();
-        let message = raw || `Request failed: ${response.status}`;
-
-        try {
-          const parsed = JSON.parse(raw) as { detail?: string };
-          if (typeof parsed.detail === "string" && parsed.detail.trim()) {
-            message = parsed.detail;
-          }
-        } catch {
-          // Keep raw response text when the body is not JSON.
+        const contentType = response.headers.get("content-type");
+        const message = buildErrorMessage(response.status, requestUrl, raw, contentType);
+        const apiError = new ApiError(response.status, message);
+        const hasFallback = index < apiBaseCandidates.length - 1;
+        if (hasFallback && shouldRetryOnHttpError(response.status, raw, contentType)) {
+          lastNetworkError = apiError;
+          continue;
         }
-
-        throw new ApiError(response.status, message);
+        throw apiError;
       }
 
       return (await response.json()) as T;
