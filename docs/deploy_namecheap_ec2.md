@@ -98,7 +98,8 @@ chmod +x deploy/ec2/configure_and_deploy.sh
 
 After deployment:
 - Frontend: `https://app.kiroz.xyz`
-- Backend health: `https://api.kiroz.xyz/health`
+- Backend health (same-origin route): `https://app.kiroz.xyz/api/health`
+- Backend health (direct api subdomain): `https://api.kiroz.xyz/health`
 
 First HTTPS issuance from Caddy may take 1-2 minutes.
 

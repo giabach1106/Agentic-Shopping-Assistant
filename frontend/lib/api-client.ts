@@ -23,13 +23,28 @@ export class ApiError extends Error {
   }
 }
 
+function resolveApiBaseCandidates() {
+  const configuredBase =
+    getRuntimeConfigValue("NEXT_PUBLIC_API_BASE_URL")?.replace(/\/+$/, "") ||
+    "http://localhost:8000";
+  const candidates = [configuredBase];
+
+  if (typeof window === "undefined") {
+    return candidates;
+  }
+
+  const sameOriginBase = `${window.location.origin.replace(/\/+$/, "")}/api`;
+  if (!candidates.includes(sameOriginBase)) {
+    candidates.push(sameOriginBase);
+  }
+  return candidates;
+}
+
 async function request<T>(
   path: string,
   init: RequestInit & { bodyJson?: JsonBody } = {}
 ): Promise<T> {
-  const apiBaseUrl =
-    getRuntimeConfigValue("NEXT_PUBLIC_API_BASE_URL")?.replace(/\/+$/, "") ||
-    "http://localhost:8000";
+  const apiBaseCandidates = resolveApiBaseCandidates();
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
 
@@ -44,36 +59,48 @@ async function request<T>(
     }
   }
 
-  let response: Response;
-  try {
-    response = await fetch(`${apiBaseUrl}${path}`, {
-      ...init,
-      headers,
-      body: init.bodyJson ? JSON.stringify(init.bodyJson) : init.body,
-    });
-  } catch (error) {
-    throw new Error(
-      `Failed to reach API at ${apiBaseUrl}. Check that the backend is running and CORS allows the frontend origin.`
-    );
-  }
-
-  if (!response.ok) {
-    const raw = await response.text();
-    let message = raw || `Request failed: ${response.status}`;
-
+  let lastNetworkError: unknown = null;
+  for (const apiBaseUrl of apiBaseCandidates) {
     try {
-      const parsed = JSON.parse(raw) as { detail?: string };
-      if (typeof parsed.detail === "string" && parsed.detail.trim()) {
-        message = parsed.detail;
-      }
-    } catch {
-      // Keep raw response text when the body is not JSON.
-    }
+      const response = await fetch(`${apiBaseUrl}${path}`, {
+        ...init,
+        headers,
+        body: init.bodyJson ? JSON.stringify(init.bodyJson) : init.body,
+      });
 
-    throw new ApiError(response.status, message);
+      if (!response.ok) {
+        const raw = await response.text();
+        let message = raw || `Request failed: ${response.status}`;
+
+        try {
+          const parsed = JSON.parse(raw) as { detail?: string };
+          if (typeof parsed.detail === "string" && parsed.detail.trim()) {
+            message = parsed.detail;
+          }
+        } catch {
+          // Keep raw response text when the body is not JSON.
+        }
+
+        throw new ApiError(response.status, message);
+      }
+
+      return (await response.json()) as T;
+    } catch (error) {
+      if (error instanceof ApiError) {
+        throw error;
+      }
+      lastNetworkError = error;
+    }
   }
 
-  return (await response.json()) as T;
+  const targetSummary = apiBaseCandidates.join(" or ");
+  const reason =
+    lastNetworkError instanceof Error && lastNetworkError.message
+      ? ` (${lastNetworkError.message})`
+      : "";
+  throw new Error(
+    `Failed to reach API at ${targetSummary}. Check that backend/Caddy is running and browser extensions are not blocking requests${reason}.`
+  );
 }
 
 export function getStoredSessionId() {

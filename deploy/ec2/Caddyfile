@@ -4,6 +4,11 @@
 
 {$CADDY_APP_DOMAIN} {
 	encode zstd gzip
+
+	handle_path /api/* {
+		reverse_proxy backend:8000
+	}
+
 	reverse_proxy frontend:3000
 }
 
