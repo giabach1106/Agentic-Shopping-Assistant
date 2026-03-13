@@ -8,5 +8,6 @@ fi
 
 git pull --ff-only
 docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml up -d --force-recreate caddy
 
 echo "Redeploy finished."
