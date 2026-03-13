@@ -16,6 +16,16 @@ class CandidateProduct(BaseModel):
     return_policy: str = Field(alias="returnPolicy", min_length=1, max_length=200)
     checkout_ready: bool = Field(alias="checkoutReady")
     evidence_refs: list[str] = Field(default_factory=list, alias="evidenceRefs")
+    constraint_tier: str = Field(
+        default="strict",
+        alias="constraintTier",
+        description="Constraint match tier: strict, soft_5, soft_10, soft_15.",
+    )
+    constraint_relaxed: bool = Field(
+        default=False,
+        alias="constraintRelaxed",
+        description="True when candidate required constraint relaxation.",
+    )
 
     @field_validator("evidence_refs")
     @classmethod

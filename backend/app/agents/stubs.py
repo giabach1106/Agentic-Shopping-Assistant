@@ -53,7 +53,7 @@ _OFF_TOPIC_PRODUCT_HINTS = (
     "laptop",
     "chair",
 )
-_COMMERCE_SOURCES = {"amazon", "walmart", "ebay"}
+_COMMERCE_SOURCES = {"amazon", "walmart", "ebay", "nutritionfaktory", "dps"}
 
 _GENERIC_CATEGORY_PHRASES = {
     "another",
@@ -1507,10 +1507,17 @@ class PriceLogisticsAgent:
             )
         )
 
-        source_priority = {"amazon": 0, "walmart": 1, "ebay": 2}
-        ranked_candidates: list[tuple[tuple[int, float, float, int], dict[str, Any]]] = []
+        source_priority = {"amazon": 0, "walmart": 1, "ebay": 2, "nutritionfaktory": 3, "dps": 4}
+        tier_rules: list[tuple[str, float]] = [
+            ("strict", 1.0),
+            ("soft_5", 1.05),
+            ("soft_10", 1.10),
+            ("soft_15", 1.15),
+        ]
+        tier_priority = {name: index for index, (name, _) in enumerate(tier_rules)}
+        ranked_candidates: list[tuple[tuple[int, int, float, float, int], dict[str, Any]]] = []
         candidates: list[dict[str, Any]] = []
-        best_candidate_by_key: dict[str, tuple[tuple[int, float, float, int], dict[str, Any]]] = {}
+        best_candidate_by_key: dict[str, tuple[tuple[int, int, float, float, int], dict[str, Any]]] = {}
         budget_max = constraints.get("budgetMax")
         try:
             budget_limit = float(budget_max) if budget_max is not None else None
@@ -1540,17 +1547,29 @@ class PriceLogisticsAgent:
                 price = float(item.get("price") or 0.0)
                 if price <= 0:
                     continue
-                if budget_limit is not None and price > (budget_limit * 1.15):
-                    continue
-                if min_rating is not None and rating > 0 and rating < min_rating:
+                if min_rating is not None and (rating <= 0 or rating < min_rating):
                     continue
                 match_score = _constraint_match_score(title, constraints)
                 if match_score <= 0:
                     continue
+                constraint_tier = "strict"
+                if budget_limit is not None:
+                    matched_tier = next(
+                        (
+                            tier_name
+                            for tier_name, multiplier in tier_rules
+                            if price <= (budget_limit * multiplier)
+                        ),
+                        None,
+                    )
+                    if matched_tier is None:
+                        continue
+                    constraint_tier = matched_tier
                 normalized_url = _normalize_url_for_key(url)
                 canonical_key = _canonical_product_key(title, normalized_url)
                 rating_for_sort = rating if rating > 0 else 0.0
                 rank_key = (
+                    tier_priority.get(constraint_tier, 99),
                     -match_score,
                     -rating_for_sort,
                     price,
@@ -1565,6 +1584,8 @@ class PriceLogisticsAgent:
                     "returnPolicy": str(item.get("return_policy") or "unknown"),
                     "checkoutReady": False,
                     "evidenceRefs": [str(item.get("evidence_id") or "").strip()],
+                    "constraintTier": constraint_tier,
+                    "constraintRelaxed": constraint_tier != "strict",
                 }
                 existing = best_candidate_by_key.get(canonical_key)
                 if existing is None or rank_key < existing[0]:
@@ -1606,7 +1627,10 @@ class PriceLogisticsAgent:
                     continue
                 key = _canonical_product_key(title, source_url)
                 if key not in deduped_fallback:
-                    deduped_fallback[key] = item
+                    fallback = dict(item)
+                    fallback["constraintTier"] = str(fallback.get("constraintTier") or "strict")
+                    fallback["constraintRelaxed"] = bool(fallback.get("constraintRelaxed") or False)
+                    deduped_fallback[key] = fallback
             candidates = list(deduped_fallback.values())[:10]
 
         blockers = list(execution_result.blockers)
