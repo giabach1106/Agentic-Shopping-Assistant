@@ -67,6 +67,20 @@ def test_concierge_handles_capability_query() -> None:
     asyncio.run(run_test())
 
 
+def test_concierge_handles_self_intro_query() -> None:
+    async def run_test() -> None:
+        agent = _agent()
+        result = await agent.run(
+            message="tell me about yourself",
+            history=[],
+            previous_state={},
+        )
+        assert result["conversationIntent"] == "capability_query"
+        assert "shopping copilot" in result["reply"].lower()
+
+    asyncio.run(run_test())
+
+
 def test_concierge_handles_project_question() -> None:
     async def run_test() -> None:
         agent = _agent()
@@ -227,5 +241,46 @@ def test_concierge_keeps_unsupported_brief_during_preference_follow_up() -> None
         assert result["constraints"]["category"] == "wireless headset"
         assert any("use case:" in item for item in result["constraints"]["mustHave"])
         assert "wireless headset" in result["reply"].lower()
+
+    asyncio.run(run_test())
+
+
+def test_concierge_explains_session_without_active_brief() -> None:
+    async def run_test() -> None:
+        agent = _agent()
+        result = await agent.run(
+            message="Explain this session and what is pending.",
+            history=[
+                {"role": "user", "content": "tell me about yourself"},
+                {"role": "assistant", "content": "I am your shopping copilot."},
+            ],
+            previous_state={},
+        )
+        assert result["conversationIntent"] == "pending_status"
+        assert "not an active shopping brief" in result["reply"].lower()
+
+    asyncio.run(run_test())
+
+
+def test_concierge_recalls_current_search_when_user_asks() -> None:
+    async def run_test() -> None:
+        agent = _agent()
+        result = await agent.run(
+            message="what did I searched",
+            history=[
+                {"role": "user", "content": "Recommend a wireless headset with long battery life and low latency."},
+                {"role": "assistant", "content": "I can help you refine that."},
+            ],
+            previous_state={
+                "constraints": {
+                    "category": "wireless headset",
+                    "budgetMax": 200,
+                    "mustHave": ["long battery life", "low latency"],
+                }
+            },
+        )
+        assert result["conversationIntent"] == "pending_status"
+        assert "wireless headset" in result["reply"].lower()
+        assert "budget under $200" in result["reply"].lower()
 
     asyncio.run(run_test())

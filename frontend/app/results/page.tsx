@@ -768,7 +768,7 @@ function ResultsContent() {
             {activeReplyKind === "confirmation_request"
               ? "Confirm next action"
               : activeClarificationPending
-                ? "Optional preference"
+                ? "Add one preference"
                 : needsFollowUp
                   ? "Resume blocked run"
                   : activeReplyKind === "discovery"
@@ -795,7 +795,7 @@ function ResultsContent() {
                       ? "Example: prioritize verified sellers with free returns."
                       : "Example: keep only options with 4.5+ stars and delivery this week."
             }
-            className="mt-3 min-h-24 w-full rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm leading-7 text-[color:var(--text-strong)] outline-none transition placeholder:text-[color:var(--text-muted)] focus:border-[color:var(--accent)]"
+            className="mt-3 min-h-16 w-full rounded-[1.35rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-2.5 text-sm leading-6 text-[color:var(--text-strong)] outline-none transition placeholder:text-[color:var(--text-muted)] focus:border-[color:var(--accent)]"
           />
           <button type="button" onClick={() => void sendChatMessage()} disabled={!chatInput.trim() || sending || !activeSessionId} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-full bg-[color:var(--accent)] px-4 py-3 text-sm font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
             {sending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}

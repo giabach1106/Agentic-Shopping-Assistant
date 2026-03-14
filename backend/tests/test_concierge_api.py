@@ -118,6 +118,35 @@ def test_unsupported_category_follow_up_keeps_original_brief(client: TestClient)
     assert "wireless headset" in second_payload["reply"].lower()
 
 
+def test_session_memory_query_summarizes_current_brief(client: TestClient) -> None:
+    session_id = _create_session(client)
+
+    first = client.post(
+        "/v1/chat",
+        json={
+            "sessionId": session_id,
+            "message": "Recommend a wireless headset with long battery life and low latency.",
+        },
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        "/v1/chat",
+        json={"sessionId": session_id, "message": "Budget under $200."},
+    )
+    assert second.status_code == 200
+
+    third = client.post(
+        "/v1/chat",
+        json={"sessionId": session_id, "message": "what did I searched"},
+    )
+    assert third.status_code == 200
+    payload = third.json()
+    assert payload["conversationIntent"] == "pending_status"
+    assert "wireless headset" in payload["reply"].lower()
+    assert "budget under $200" in payload["reply"].lower()
+
+
 def test_resume_confirmation_can_force_collect(client: TestClient) -> None:
     session_id = _create_session(client)
 

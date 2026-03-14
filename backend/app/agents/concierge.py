@@ -25,6 +25,10 @@ _CAPABILITY_PATTERN = re.compile(
     r"(what can you help|what can you do|how can you help|help me with|ban co the giup|ban lam duoc gi)",
     re.IGNORECASE,
 )
+_SELF_PATTERN = re.compile(
+    r"(tell me about yourself|who are you|what are you|introduce yourself)",
+    re.IGNORECASE,
+)
 _PROJECT_PATTERN = re.compile(
     r"(tech stack|technology|technologies|stack|how are you built|how is this project built|"
     r"what does this project use|what is this project using|frontend|backend|fastapi|next\.?js|"
@@ -33,6 +37,11 @@ _PROJECT_PATTERN = re.compile(
 )
 _STATUS_PATTERN = re.compile(
     r"(status|progress|update|what next|what now|pending|blocked|stuck|tiep theo|ke tiep)",
+    re.IGNORECASE,
+)
+_SESSION_MEMORY_PATTERN = re.compile(
+    r"(explain this session|what did i search|what did i searched|what have i searched|"
+    r"what was i looking for|what am i shopping for|what did i ask|session so far)",
     re.IGNORECASE,
 )
 _RESUME_PATTERN = re.compile(
@@ -146,6 +155,8 @@ class ConciergeAgent:
             )
 
         if intent == "capability_query":
+            if _SELF_PATTERN.search(message):
+                return self._self_response(history=history, constraints=constraints)
             return self._capability_response()
         if intent == "project_question":
             return self._project_response(message=message)
@@ -153,6 +164,7 @@ class ConciergeAgent:
             return self._small_talk_response()
         if intent == "pending_status":
             return self._pending_status_response(
+                history=history,
                 constraints=constraints,
                 pending_action=pending_action,
                 missing_evidence=missing_evidence,
@@ -219,12 +231,16 @@ class ConciergeAgent:
     ) -> str:
         if pending_action:
             return "pending_status"
+        if _SELF_PATTERN.search(message):
+            return "capability_query"
         if _CAPABILITY_PATTERN.search(message):
             return "capability_query"
         if _PROJECT_PATTERN.search(message):
             return "project_question"
         if _SMALL_TALK_PATTERN.search(message.strip()):
             return "small_talk"
+        if _SESSION_MEMORY_PATTERN.search(message):
+            return "pending_status"
         if _STATUS_PATTERN.search(message) and (missing_evidence or existing_category):
             return "pending_status"
         if _RESUME_PATTERN.fullmatch(message.strip()) and existing_category:
@@ -280,9 +296,9 @@ class ConciergeAgent:
 
     def _capability_response(self) -> dict[str, Any]:
         reply = (
-            "I can help you turn a shopping idea into a structured search, compare current results, "
-            "explain what is blocking a session, and answer repo-grounded questions about how this "
-            "project is built."
+            "I can act like a shopping copilot for this session: help shape what you want to buy, "
+            "keep track of the brief as it evolves, explain what is blocking progress, compare current "
+            "results, and answer repo-grounded questions about how this project is built."
         )
         return {
             "route": "respond_only",
@@ -296,6 +312,38 @@ class ConciergeAgent:
             "nextActions": [
                 _action("find_product", "Find a product", "I want help finding a product.", "reply", "primary"),
                 _action("compare_results", "Compare results", "Compare the current results for me.", "continue", "secondary"),
+                _action("explain_session", "Explain this session", "Explain this session and what is pending.", "reply", "secondary"),
+                _action("project_stack", "Show project tech stack", "What tech stack does this project use?", "reply", "subtle"),
+            ],
+            "pendingAction": None,
+            "supportLevel": "unsupported",
+            "forceCollect": False,
+            "domain": "generic",
+        }
+
+    def _self_response(
+        self,
+        *,
+        history: list[dict[str, Any]],
+        constraints: dict[str, Any],
+    ) -> dict[str, Any]:
+        session_summary = self._session_summary(history=history, constraints=constraints)
+        reply = (
+            "I am your shopping copilot for this session. I help turn rough product ideas into a clear brief, "
+            "track the preferences you already gave me, explain what is blocked, and keep the search moving. "
+            f"{session_summary}"
+        )
+        return {
+            "route": "respond_only",
+            "reply": reply,
+            "status": "OK",
+            "needsFollowUp": False,
+            "conversationMode": "concierge",
+            "conversationIntent": "capability_query",
+            "replyKind": "answer",
+            "handledBy": "concierge",
+            "nextActions": [
+                _action("find_product", "Find a product", "I want help finding a product.", "reply", "primary"),
                 _action("explain_session", "Explain this session", "Explain this session and what is pending.", "reply", "secondary"),
                 _action("project_stack", "Show project tech stack", "What tech stack does this project use?", "reply", "subtle"),
             ],
@@ -365,6 +413,7 @@ class ConciergeAgent:
     def _pending_status_response(
         self,
         *,
+        history: list[dict[str, Any]],
         constraints: dict[str, Any],
         pending_action: dict[str, Any] | None,
         missing_evidence: list[str],
@@ -372,10 +421,14 @@ class ConciergeAgent:
         domain: str,
         support_level: str,
     ) -> dict[str, Any]:
+        session_summary = self._session_summary(history=history, constraints=constraints)
         if pending_action:
             return {
                 "route": "ask_confirmation",
-                "reply": str(pending_action.get("prompt") or "I am waiting for your confirmation."),
+                "reply": (
+                    f"{session_summary} "
+                    f"{str(pending_action.get('prompt') or 'I am waiting for your confirmation.')}"
+                ).strip(),
                 "status": "NEED_DATA",
                 "needsFollowUp": True,
                 "conversationMode": "concierge",
@@ -395,6 +448,7 @@ class ConciergeAgent:
 
         if missing_evidence or blocking_agents:
             reply = (
+                f"{session_summary} "
                 "The current session is still blocked. "
                 f"Missing evidence: {', '.join(missing_evidence[:4]) or 'none listed'}. "
                 f"Blocking agents: {', '.join(blocking_agents[:3]) or 'none listed'}."
@@ -424,7 +478,29 @@ class ConciergeAgent:
                 "constraints": constraints,
             }
 
-        return self._fallback_response()
+        reply = (
+            f"{session_summary} "
+            "There is no blocked step right now. If you want, add another preference or start a new product brief."
+        ).strip()
+        return {
+            "route": "respond_only",
+            "reply": reply,
+            "status": "OK",
+            "needsFollowUp": False,
+            "conversationMode": "concierge",
+            "conversationIntent": "pending_status",
+            "replyKind": "status_update",
+            "handledBy": "concierge",
+            "nextActions": [
+                _action("find_product", "Find a product", "I want help finding a product.", "reply", "primary"),
+                _action("project_stack", "Project tech stack", "What tech stack does this project use?", "reply", "secondary"),
+            ],
+            "pendingAction": None,
+            "supportLevel": support_level,
+            "forceCollect": False,
+            "domain": domain,
+            "constraints": constraints,
+        }
 
     def _discovery_response(
         self,
@@ -470,23 +546,25 @@ class ConciergeAgent:
         else:
             if brief_summary:
                 reply = (
-                    f"I am structuring the brief for {category}. So far I have {brief_summary}. "
-                    "Live evidence comparison is not ready for this category yet, but I can keep refining the brief."
+                    f"Here is the brief so far for {category}: {brief_summary}. "
+                    "I cannot run the live comparison stack for this category yet, but I can keep tightening the brief "
+                    "so the next step is clear."
                 )
             else:
                 reply = (
-                    f"I can help you refine {category}, but live evidence comparison is only ready for supplements, "
-                    "chairs, and desks right now. Tell me your budget and your top priorities, and I will structure the brief."
+                    f"I can still help you shop for {category}. "
+                    "Live evidence comparison is only ready for supplements, chairs, and desks right now, "
+                    "but I can capture the brief for you. Tell me your budget and the top one or two things that matter most."
                 )
             actions = [
-                _action("generic_budget", "Share budget", "Budget under $200.", "reply", "primary"),
-                _action("generic_use_case", "Share use case", "Main use case: daily study and home office.", "reply", "secondary"),
-                _action("generic_delivery", "Share delivery window", "Need delivery this week.", "reply", "secondary"),
+                _action("generic_budget", "Set a budget", "Budget under $200.", "reply", "primary"),
+                _action("generic_use_case", "Add use case", "Main use case: daily study and home office.", "reply", "secondary"),
+                _action("generic_delivery", "Add priority", "Priority: low latency and all-day comfort.", "reply", "secondary"),
             ]
 
         if explicit_follow_up:
             if brief_summary and domain not in {"chair", "desk", "supplement"}:
-                reply = "I captured that update. " + reply
+                reply = "Got it. " + reply
             else:
                 reply = "I still need a bit more detail. " + reply
 
@@ -776,6 +854,27 @@ class ConciergeAgent:
         if preferences:
             parts.append("priorities like " + ", ".join(preferences))
         return ", ".join(parts)
+
+    def _session_summary(
+        self,
+        *,
+        history: list[dict[str, Any]],
+        constraints: dict[str, Any],
+    ) -> str:
+        category = self._sanitize_category(str(constraints.get("category") or "").strip() or None)
+        if not category:
+            category = self._recent_user_category(history)
+        if not category:
+            return (
+                "There is not an active shopping brief yet in this session. "
+                "So far you have mostly asked about what I can do."
+            )
+
+        summary_parts = [f"This session is currently about {category}."]
+        brief_summary = self._discovery_brief_summary(constraints)
+        if brief_summary:
+            summary_parts.append(f"I have {brief_summary}.")
+        return " ".join(summary_parts)
 
     def _support_level(self, domain: str, category: str | None) -> str:
         if not category:
