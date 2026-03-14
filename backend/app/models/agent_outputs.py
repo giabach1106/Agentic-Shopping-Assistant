@@ -42,7 +42,7 @@ class ExecutionTraceEvent(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     step: str = Field(min_length=1, max_length=120)
-    status: Literal["ok", "warning", "blocked", "skipped"]
+    status: Literal["ok", "warning", "blocked", "skipped", "error"]
     detail: str = Field(min_length=1, max_length=400)
 
 

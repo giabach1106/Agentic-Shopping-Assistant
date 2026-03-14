@@ -83,6 +83,39 @@ _NOISE_TERMS = {
     "delivered",
 }
 
+_TRACE_STATUS_MAP = {
+    "ok": "ok",
+    "warning": "warning",
+    "blocked": "blocked",
+    "skipped": "skipped",
+    "error": "error",
+    "failed": "error",
+    "failure": "error",
+    "exception": "error",
+    "need_data": "warning",
+    "needs_data": "warning",
+}
+
+
+def _normalize_trace_status(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    return _TRACE_STATUS_MAP.get(normalized, "warning")
+
+
+def _normalize_trace_event(item: Any, *, step_prefix: str = "") -> dict[str, str] | None:
+    if not isinstance(item, dict):
+        return None
+    raw_step = str(item.get("step") or "unknown").strip()
+    step = f"{step_prefix}{raw_step}" if step_prefix else raw_step
+    if not step:
+        step = "unknown"
+    detail = str(item.get("detail") or "").strip() or "No detail provided."
+    return {
+        "step": step,
+        "status": _normalize_trace_status(item.get("status")),
+        "detail": detail,
+    }
+
 
 def _normalize_url_for_key(value: str) -> str:
     trimmed = value.strip()
@@ -1639,19 +1672,24 @@ class PriceLogisticsAgent:
         if self._runtime_mode == "prod" and len(candidates) == 0:
             blockers.append("missing_realtime_products")
 
-        trace = execution_result.to_public_dict().get("executionTrace", [])
+        raw_trace = execution_result.to_public_dict().get("executionTrace", [])
+        trace = [
+            event
+            for event in (
+                _normalize_trace_event(item)
+                for item in (raw_trace if isinstance(raw_trace, list) else [])
+            )
+            if event is not None
+        ]
         if isinstance(collection, dict):
             collect_trace = collection.get("trace", [])
             if isinstance(collect_trace, list):
                 trace = [
                     *[
-                        {
-                            "step": f"collect::{str(item.get('step') or 'unknown')}",
-                            "status": str(item.get("status") or "warning"),
-                            "detail": str(item.get("detail") or ""),
-                        }
+                        event
                         for item in collect_trace
-                        if isinstance(item, dict)
+                        for event in [_normalize_trace_event(item, step_prefix="collect::")]
+                        if event is not None
                     ],
                     *trace,
                 ]

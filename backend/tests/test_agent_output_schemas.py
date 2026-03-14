@@ -31,6 +31,23 @@ def test_price_logistics_output_enforces_stop_before_pay() -> None:
         )
 
 
+def test_price_logistics_trace_allows_error_status() -> None:
+    output = PriceLogisticsOutput(
+        candidates=[],
+        executionTrace=[
+            {
+                "step": "collect::walmart",
+                "status": "error",
+                "detail": "Walmart scraper blocked by anti-bot page.",
+            }
+        ],
+        blockers=[],
+        consentAutofill=False,
+        stopBeforePay=True,
+    )
+    assert output.execution_trace[0].status == "error"
+
+
 def test_visual_insight_requires_required_evidence_when_needed() -> None:
     with pytest.raises(ValidationError):
         VisualInsight(
