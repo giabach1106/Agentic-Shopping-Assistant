@@ -6,12 +6,16 @@ import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   BadgeCheck,
+  LoaderCircle,
+  Mic,
+  MicOff,
   MoonStar,
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
 
 import { useAppShellState } from "@/hooks/use-app-shell-state";
+import { useSpeechRecognition } from "@/hooks/use-speech-recognition";
 import {
   exchangeCodeForTokens,
   storeTokens,
@@ -35,6 +39,9 @@ function LandingPage() {
   const [query, setQuery] = useState("");
   const [authError, setAuthError] = useState("");
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const speech = useSpeechRecognition({
+    onTranscriptChange: setQuery,
+  });
 
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -152,18 +159,57 @@ function LandingPage() {
               handleSubmit(query);
             }}
           >
-            <textarea
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  handleSubmit(query);
-                }
-              }}
-              placeholder="Ergonomic chair under $150, 4+ stars, and delivered by Friday."
-              className="min-h-40 w-full rounded-[1.9rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-5 py-4 text-base leading-7 text-[color:var(--text-strong)] outline-none transition placeholder:text-[color:var(--text-muted)] focus:border-[color:var(--accent)]"
-            />
+            <div className="relative">
+              <textarea
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    handleSubmit(query);
+                  }
+                }}
+                placeholder="Ergonomic chair under $150, 4+ stars, and delivered by Friday."
+                className="min-h-40 w-full rounded-[1.9rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-5 py-4 pr-16 text-base leading-7 text-[color:var(--text-strong)] outline-none transition placeholder:text-[color:var(--text-muted)] focus:border-[color:var(--accent)]"
+              />
+              <button
+                type="button"
+                onClick={speech.isListening || speech.isStarting ? speech.stopListening : speech.startListening}
+                disabled={!speech.isSupported && !speech.isListening}
+                aria-label={speech.isListening ? "Stop voice input" : "Start voice input"}
+                title={speech.statusLabel}
+                className="absolute bottom-4 right-4 inline-flex h-10 w-10 items-center justify-center rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--text-soft)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {speech.isStarting ? (
+                  <LoaderCircle className="h-4 w-4 animate-spin" />
+                ) : speech.isListening ? (
+                  <MicOff className="h-4 w-4" />
+                ) : (
+                  <Mic className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3 text-sm">
+              <span
+                className={`rounded-full border px-3 py-1 ${
+                  speech.isListening
+                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                    : speech.isStarting
+                      ? "border-[color:var(--border)] bg-[color:var(--surface-strong)] text-[color:var(--text-soft)]"
+                      : "border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--text-muted)]"
+                }`}
+              >
+                {speech.statusLabel}
+              </span>
+              {speech.error ? (
+                <p className="text-sm text-amber-700 dark:text-amber-300">{speech.error}</p>
+              ) : speech.isListening ? (
+                <p className="text-sm text-[color:var(--text-soft)]">
+                  Speak your request. The transcript will appear here and stays editable.
+                </p>
+              ) : null}
+            </div>
 
             {authError ? (
               <p className="rounded-[1.5rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-300">
