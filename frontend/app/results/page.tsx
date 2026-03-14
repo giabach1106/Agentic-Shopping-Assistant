@@ -274,6 +274,7 @@ function ResultsContent() {
   const [thinkingStageIndex, setThinkingStageIndex] = useState(0);
   const [desktopRailOpen, setDesktopRailOpen] = useState(true);
   const [mobileRailOpen, setMobileRailOpen] = useState(false);
+  const [showComposerSuggestions, setShowComposerSuggestions] = useState(false);
   const bootKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -498,14 +499,17 @@ function ResultsContent() {
       | { field?: string; prompt?: string; example?: string | null }
       | null) ??
       null);
-  const quickActions: NextAction[] =
-    recommendation?.nextActions?.length
-      ? recommendation.nextActions
-      : latestAssistantMeta?.nextActions?.length
-        ? latestAssistantMeta.nextActions
-        : checkpointConversation?.next_actions?.length
-          ? checkpointConversation.next_actions
-          : [];
+  const quickActions = useMemo<NextAction[]>(
+    () =>
+      recommendation?.nextActions?.length
+        ? recommendation.nextActions
+        : latestAssistantMeta?.nextActions?.length
+          ? latestAssistantMeta.nextActions
+          : checkpointConversation?.next_actions?.length
+            ? checkpointConversation.next_actions
+            : [],
+    [checkpointConversation?.next_actions, latestAssistantMeta?.nextActions, recommendation?.nextActions]
+  );
   const activeCoverageConfidence =
     recommendation?.coverageConfidence ||
     latestAssistantMeta?.coverageConfidence ||
@@ -526,16 +530,32 @@ function ResultsContent() {
     recommendation?.reply ||
     latestAssistantMessage?.content ||
     "Session is active. Add one follow-up constraint to continue.";
+  const activeDecisionSummary =
+    recommendation?.decisionSummary ||
+    latestAssistantMeta?.decisionSummary ||
+    agentReplyText;
+  const compactQuickActions = useMemo(
+    () =>
+      activePendingAction
+        ? quickActions.slice(0, 2)
+        : showComposerSuggestions
+          ? quickActions.slice(0, 6)
+          : quickActions.slice(0, 2),
+    [activePendingAction, quickActions, showComposerSuggestions]
+  );
+
+  useEffect(() => {
+    setShowComposerSuggestions(activeReplyKind === "confirmation_request");
+  }, [activeReplyKind, activeClarificationPending?.prompt, quickActions.length]);
 
   const trustRadarData = useMemo(
     () => [
-      { metric: "Rating", value: (recommendation?.scientificScore.ratingReliability ?? 0) * 100 },
-      { metric: "Authenticity", value: (recommendation?.scientificScore.spamAuthenticity ?? 0) * 100 },
-      { metric: "ABSA", value: (recommendation?.scientificScore.absaAlignment ?? 0) * 100 },
-      { metric: "Visual", value: (recommendation?.scientificScore.visualReliability ?? 0) * 100 },
-      { metric: "Final", value: recommendation?.scientificScore.finalTrust ?? 0 },
+      { metric: "Fit", value: recommendation?.scoreBreakdown?.productFit ?? 0 },
+      { metric: "Evidence", value: recommendation?.scoreBreakdown?.evidenceConfidence ?? 0 },
+      { metric: "Crawl", value: recommendation?.scoreBreakdown?.crawlHealth ?? 0 },
+      { metric: "Decision", value: recommendation?.scoreBreakdown?.decisionScore ?? 0 },
     ],
-    [recommendation?.scientificScore]
+    [recommendation?.scoreBreakdown]
   );
   const hasTrustRadarSignal = useMemo(
     () => trustRadarData.some((entry) => entry.value > 0),
@@ -555,11 +575,10 @@ function ResultsContent() {
   const evidenceRows = useMemo(
     () =>
       reviewInsights.rankedEvidence.slice(0, 8).map((item) => {
-        const sentiment = evidenceSentiment(item.excerpt || item.docId);
         return {
           ...item,
-          positiveCount: sentiment.positive.length,
-          negativeCount: sentiment.negative.length,
+          positiveCount: item.positiveSignals.length,
+          negativeCount: item.negativeSignals.length,
         };
       }),
     [reviewInsights.rankedEvidence]
@@ -570,7 +589,7 @@ function ResultsContent() {
 
     return (
       <div className="flex h-full min-h-0 flex-col">
-        <div className="border-b border-[color:var(--border)] px-5 py-4">
+        <div className="sticky top-0 z-10 border-b border-[color:var(--border)] bg-[color:var(--surface)] px-5 py-4">
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-[11px] uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Live session</p>
@@ -649,7 +668,7 @@ function ResultsContent() {
                         </span>
                       ) : null}
                     </div>
-                    <p>{meta?.summary ? String(meta.summary) : message.content}</p>
+                    <p>{meta?.decisionSummary ? String(meta.decisionSummary) : meta?.summary ? String(meta.summary) : message.content}</p>
                     {!isUser && messageActions.length ? (
                       <div className="mt-3 flex flex-wrap gap-2">
                         {messageActions.slice(0, 3).map((action) => (
@@ -701,30 +720,48 @@ function ResultsContent() {
           </div>
         </div>
 
-        <div className="border-t border-[color:var(--border)] px-5 py-4">
+        <div className="sticky bottom-0 z-10 border-t border-[color:var(--border)] bg-[color:var(--surface)] px-5 py-4">
           {activePendingAction ? (
             <div className="mb-3 rounded-[1.3rem] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
               Awaiting confirmation: {activePendingAction.prompt}
             </div>
           ) : null}
           {!activePendingAction && activeClarificationPending ? (
-            <div className="mb-3 rounded-[1.3rem] border border-sky-500/20 bg-sky-500/10 px-4 py-3 text-sm text-sky-700 dark:text-sky-300">
-              {activeClarificationPending.prompt}
+            <div className="mb-3 flex items-center justify-between gap-3 rounded-[1.2rem] border border-sky-500/20 bg-sky-500/10 px-4 py-2.5 text-sm text-sky-700 dark:text-sky-300">
+              <p className="min-w-0 flex-1 truncate">{activeClarificationPending.prompt}</p>
+              {quickActions.length ? (
+                <button
+                  type="button"
+                  onClick={() => setShowComposerSuggestions((current) => !current)}
+                  className="shrink-0 rounded-full border border-sky-500/20 px-2.5 py-1 text-[11px] uppercase tracking-[0.16em] transition hover:border-sky-500/40"
+                >
+                  {showComposerSuggestions ? "Hide suggestions" : "Show suggestions"}
+                </button>
+              ) : null}
             </div>
           ) : null}
-          {quickActions.length ? (
-            <div className="mb-3 flex flex-wrap gap-2">
-              {quickActions.slice(0, 4).map((action) => (
+          {compactQuickActions.length ? (
+            <div className="mb-3 flex items-center gap-2 overflow-x-auto pb-1">
+              {compactQuickActions.map((action) => (
                 <button
                   key={action.id}
                   type="button"
                   onClick={() => void sendChatMessage(action.message)}
                   disabled={sending || !activeSessionId}
-                  className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${actionButtonClass(action.style)}`}
+                  className={`inline-flex shrink-0 items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${actionButtonClass(action.style)}`}
                 >
                   {action.label}
                 </button>
               ))}
+              {!activePendingAction && quickActions.length > compactQuickActions.length ? (
+                <button
+                  type="button"
+                  onClick={() => setShowComposerSuggestions(true)}
+                  className="inline-flex shrink-0 items-center rounded-full border border-[color:var(--border)] px-3 py-1.5 text-[11px] uppercase tracking-[0.16em] text-[color:var(--text-muted)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
+                >
+                  More
+                </button>
+              ) : null}
             </div>
           ) : null}
           <label className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">
@@ -758,7 +795,7 @@ function ResultsContent() {
                       ? "Example: prioritize verified sellers with free returns."
                       : "Example: keep only options with 4.5+ stars and delivery this week."
             }
-            className="mt-3 min-h-28 w-full rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm leading-7 text-[color:var(--text-strong)] outline-none transition placeholder:text-[color:var(--text-muted)] focus:border-[color:var(--accent)]"
+            className="mt-3 min-h-24 w-full rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm leading-7 text-[color:var(--text-strong)] outline-none transition placeholder:text-[color:var(--text-muted)] focus:border-[color:var(--accent)]"
           />
           <button type="button" onClick={() => void sendChatMessage()} disabled={!chatInput.trim() || sending || !activeSessionId} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-full bg-[color:var(--accent)] px-4 py-3 text-sm font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
             {sending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
@@ -907,9 +944,9 @@ function ResultsContent() {
             <div className="mt-8 grid gap-4 md:grid-cols-4">
               <MetricCard label="Verdict" value={recommendation?.decision?.verdict ?? "Pending"} />
               <MetricCard
-                label="Trust score"
-                value={recommendation?.scientificScore.finalTrust ?? 0}
-                tone={scoreTone(recommendation?.scientificScore.finalTrust ?? 0)}
+                label="Decision score"
+                value={recommendation?.scoreBreakdown?.decisionScore ?? recommendation?.scientificScore.finalTrust ?? 0}
+                tone={scoreTone(recommendation?.scoreBreakdown?.decisionScore ?? recommendation?.scientificScore.finalTrust ?? 0)}
               />
               <MetricCard
                 label="Commerce coverage"
@@ -938,7 +975,7 @@ function ResultsContent() {
             <div className="mt-8 grid gap-4 lg:grid-cols-2">
               <div className="rounded-[1.8rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-5">
                 <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Agent response</p>
-                <p className="mt-4 text-sm leading-7 text-[color:var(--text-soft)]">{agentReplyText}</p>
+                <p className="mt-4 text-sm leading-7 text-[color:var(--text-soft)]">{activeDecisionSummary}</p>
                 {activeReplyKind === "confirmation_request" && activePendingAction ? (
                   <div className="mt-4 rounded-[1.3rem] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
                     Awaiting confirmation: {activePendingAction.prompt}
@@ -995,10 +1032,10 @@ function ResultsContent() {
                   </div>
                   <div className="min-w-0">
                     <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">{selectedProduct.storeName}</p>
-                    <h3 className="mt-2 line-clamp-2 text-xl font-semibold leading-8 text-[color:var(--text-strong)]">
+                    <h3 className="mt-2 line-clamp-3 text-lg font-semibold leading-7 text-[color:var(--text-strong)]">
                       {selectedProduct.title}
                     </h3>
-                    <p className="mt-2 line-clamp-2 text-sm leading-6 text-[color:var(--text-soft)]">
+                    <p className="mt-2 line-clamp-3 text-sm leading-6 text-[color:var(--text-soft)]">
                       {selectedProduct.productInsight.headline}
                     </p>
                     <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-[color:var(--text-soft)]">
@@ -1165,8 +1202,8 @@ function ResultsContent() {
 
       <div className="hidden xl:block">
         {desktopRailOpen ? (
-          <aside className="fixed inset-y-0 right-0 z-40 hidden w-[26rem] border-l border-[color:var(--border)] bg-[color:var(--surface)]/98 shadow-[-16px_0_40px_rgba(0,0,0,0.08)] backdrop-blur-xl xl:block">
-            <div className="flex h-full min-h-0 flex-col pt-24">
+          <aside className="fixed right-0 top-20 z-40 hidden h-[calc(100vh-5rem)] w-[26rem] border-l border-[color:var(--border)] bg-[color:var(--surface)]/98 shadow-[-16px_0_40px_rgba(0,0,0,0.08)] backdrop-blur-xl xl:block">
+            <div className="flex h-full min-h-0 flex-col">
               {renderLiveSessionRail("desktop")}
             </div>
           </aside>
@@ -1190,7 +1227,7 @@ function ResultsContent() {
             aria-label="Close live session rail"
           />
           <aside className="absolute inset-y-0 right-0 flex w-full max-w-[28rem] flex-col border-l border-[color:var(--border)] bg-[color:var(--surface)] shadow-[-12px_0_32px_rgba(0,0,0,0.18)]">
-            <div className="pt-6">{renderLiveSessionRail("mobile")}</div>
+            <div className="flex h-full min-h-0 flex-col">{renderLiveSessionRail("mobile")}</div>
           </aside>
         </div>
       ) : null}

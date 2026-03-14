@@ -10,8 +10,14 @@ export interface RatingSummary {
 export interface RankedEvidenceItem {
   docId: string;
   source: string;
+  kind: string;
   qualityScore: number;
+  relevanceScore: number;
+  productMatch: number;
   promoSignals: string[];
+  positiveSignals: string[];
+  negativeSignals: string[];
+  sentimentScore: number;
   excerpt: string;
 }
 
@@ -20,7 +26,8 @@ export interface ReviewInsights {
   absaSignals: Array<{ aspect: string; score: number }>;
   ratingSummary: RatingSummary;
   evidenceQualityScore: number;
-  paidPromoLikelihood: number;
+  paidPromoLikelihood: number | null;
+  promoLikelihoodStatus: "known" | "unknown";
   confidence: number;
   reviewCount: number;
   evidenceRefs: string[];
@@ -56,8 +63,6 @@ const emptyRatingSummary: RatingSummary = {
   positiveCount: 0,
   positiveRate: 0,
 };
-const COMMERCE_SOURCES = new Set(["amazon", "ebay", "walmart", "nutritionfaktory", "dps"]);
-
 function toCheckpointState(snapshot: SessionSnapshotResponse | null) {
   return (snapshot?.checkpointState as CheckpointStateShape | null) ?? null;
 }
@@ -85,19 +90,31 @@ function isHttpUrl(value: string) {
 export function getReviewInsights(snapshot: SessionSnapshotResponse | null): ReviewInsights {
   const review = getAgentOutputs(snapshot).review ?? {};
   const rawSourceStats = review.sourceStats;
+  const rawEvidenceDiagnostics = review.evidenceDiagnostics;
   const rawAbsaSignals = review.absaSignals;
   const rawRatingSummary = review.ratingSummary;
   const rawRankedEvidence = review.rankedEvidence;
   const rawDuplicateClusters = review.duplicateReviewClusters;
 
   const sourceStats =
-    rawSourceStats && typeof rawSourceStats === "object"
+    rawEvidenceDiagnostics &&
+    typeof rawEvidenceDiagnostics === "object" &&
+    (rawEvidenceDiagnostics as Record<string, unknown>).acceptedReviewSources &&
+    typeof (rawEvidenceDiagnostics as Record<string, unknown>).acceptedReviewSources === "object"
+      ? Object.entries(
+          (rawEvidenceDiagnostics as Record<string, unknown>).acceptedReviewSources as Record<string, unknown>
+        )
+          .map(([source, count]) => ({
+            source,
+            count: asNumber(count),
+          }))
+          .sort((left, right) => right.count - left.count)
+      : rawSourceStats && typeof rawSourceStats === "object"
       ? Object.entries(rawSourceStats as Record<string, unknown>)
           .map(([source, count]) => ({
             source,
             count: asNumber(count),
           }))
-          .filter((item) => COMMERCE_SOURCES.has(item.source.toLowerCase()))
           .sort((left, right) => right.count - left.count)
       : [];
 
@@ -128,16 +145,23 @@ export function getReviewInsights(snapshot: SessionSnapshotResponse | null): Rev
 
           const entry = item as Record<string, unknown>;
           const source = typeof entry.source === "string" ? entry.source : "unknown";
-          if (!COMMERCE_SOURCES.has(source.toLowerCase())) {
-            return null;
-          }
           const rawQuality = asNumber(entry.qualityScore);
           const qualityScore = rawQuality <= 1 ? Math.round(rawQuality * 100) : Math.round(rawQuality);
+          const rawRelevance = asNumber(entry.relevanceScore);
+          const relevanceScore = rawRelevance <= 1 ? Math.round(rawRelevance * 100) : Math.round(rawRelevance);
+          const rawProductMatch = asNumber(entry.productMatch);
+          const productMatch = rawProductMatch <= 1 ? Math.round(rawProductMatch * 100) : Math.round(rawProductMatch);
           return {
             docId: typeof entry.docId === "string" ? entry.docId : "unknown",
             source,
+            kind: typeof entry.kind === "string" ? entry.kind : "review",
             qualityScore,
+            relevanceScore,
+            productMatch,
             promoSignals: asStringArray(entry.promoSignals),
+            positiveSignals: asStringArray(entry.positiveSignals),
+            negativeSignals: asStringArray(entry.negativeSignals),
+            sentimentScore: asNumber(entry.sentimentScore),
             excerpt: typeof entry.excerpt === "string" ? entry.excerpt : "",
           };
         })
@@ -149,7 +173,14 @@ export function getReviewInsights(snapshot: SessionSnapshotResponse | null): Rev
     absaSignals,
     ratingSummary,
     evidenceQualityScore: Math.round(asNumber(review.evidenceQualityScore) * 100),
-    paidPromoLikelihood: Math.round(asNumber(review.paidPromoLikelihood) * 100),
+    paidPromoLikelihood:
+      review.promoLikelihoodStatus === "unknown" || review.paidPromoLikelihood == null
+        ? null
+        : Math.round(asNumber(review.paidPromoLikelihood) * 100),
+    promoLikelihoodStatus:
+      typeof review.promoLikelihoodStatus === "string" && review.promoLikelihoodStatus === "unknown"
+        ? "unknown"
+        : "known",
     confidence: Math.round(asNumber(review.confidence) * 100),
     reviewCount: asNumber(review.reviewCount),
     evidenceRefs: asStringArray(review.evidenceRefs),

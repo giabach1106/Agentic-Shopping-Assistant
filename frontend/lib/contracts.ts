@@ -37,6 +37,10 @@ export interface ChatResponse {
   reply: string;
   decision: AgentDecision | null;
   scientificScore: ScientificScore;
+  scoreBreakdown: ScoreBreakdown;
+  decisionSummary: string;
+  decisionDiagnostics: DecisionDiagnostics;
+  evidenceDiagnostics: EvidenceDiagnostics;
   evidenceStats: EvidenceStats;
   coverageAudit: CoverageAudit;
   trace: TraceEvent[];
@@ -74,6 +78,33 @@ export interface ScientificScore {
   finalTrust: number;
 }
 
+export interface ScoreBreakdown {
+  productFit: number;
+  evidenceConfidence: number;
+  crawlHealth: number;
+  decisionScore: number;
+}
+
+export interface DecisionDiagnostics {
+  inputCounts?: Record<string, number>;
+  acceptedRejected?: Record<string, number>;
+  rejectionReasons?: Record<string, number>;
+  sourceHealth?: Record<string, unknown>;
+  scoreContribution?: Record<string, number>;
+  coverageConfidence?: string;
+  checkoutReadiness?: string;
+}
+
+export interface EvidenceDiagnostics {
+  sourceCounts?: Record<string, number>;
+  acceptedReviewSources?: Record<string, number>;
+  contentKindCounts?: Record<string, number>;
+  sourceBucketCounts?: Record<string, number>;
+  rejectionReasons?: Record<string, number>;
+  acceptedReviewCount?: number;
+  totalEvidenceCount?: number;
+}
+
 export interface EvidenceStats {
   sourceCoverage: number;
   commerceSourceCoverage: number;
@@ -83,6 +114,7 @@ export interface EvidenceStats {
   candidateCount?: number;
   blockedCommerceSources?: string[];
   missingFields: string[];
+  promoLikelihoodStatus?: "known" | "unknown";
 }
 
 export interface TraceEvent {
@@ -101,6 +133,7 @@ export interface SessionMessage {
 
 export interface AssistantMessageMeta {
   summary?: string;
+  decisionSummary?: string;
   verdict?: string | null;
   trust?: number | null;
   topReasons?: string[];
@@ -119,6 +152,9 @@ export interface AssistantMessageMeta {
   coverageConfidence?: CoverageConfidence;
   checkoutReadiness?: string;
   sourceHealth?: Record<string, unknown>;
+  scoreBreakdown?: ScoreBreakdown;
+  decisionDiagnostics?: DecisionDiagnostics;
+  evidenceDiagnostics?: EvidenceDiagnostics;
 }
 
 export interface SessionSnapshotResponse {
@@ -208,6 +244,10 @@ export interface SessionProduct {
   ingredientAnalysis: IngredientAnalysis;
   productInsight: ProductInsight;
   scientificScore: ScientificScore;
+  scoreBreakdown: ScoreBreakdown;
+  decisionSummary: string;
+  decisionDiagnostics: DecisionDiagnostics;
+  evidenceDiagnostics: EvidenceDiagnostics;
   evidenceStats: EvidenceStats;
   trace: TraceEvent[];
 }
@@ -237,7 +277,10 @@ export interface RatingCoverage {
 export interface EvidenceRow {
   docId: string;
   source: string;
+  kind: string;
   qualityScore: number;
+  relevanceScore: number;
+  productMatch: number;
   promoSignals: string[];
   excerpt: string;
   positiveSignals: string[];
@@ -271,6 +314,10 @@ export interface RecommendationResponse {
   reply: string;
   decision: AgentDecision | null;
   scientificScore: ScientificScore;
+  scoreBreakdown: ScoreBreakdown;
+  decisionSummary: string;
+  decisionDiagnostics: DecisionDiagnostics;
+  evidenceDiagnostics: EvidenceDiagnostics;
   evidenceStats: EvidenceStats;
   coverageAudit: CoverageAudit;
   trace: TraceEvent[];

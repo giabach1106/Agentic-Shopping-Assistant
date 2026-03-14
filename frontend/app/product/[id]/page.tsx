@@ -86,6 +86,8 @@ function ProductDetailContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedSource, setSelectedSource] = useState<string>("all");
+  const [titleExpanded, setTitleExpanded] = useState(false);
+  const [headlineExpanded, setHeadlineExpanded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -262,12 +264,15 @@ function ProductDetailContent() {
     return filteredRankedEvidence.slice(0, 12).map((item) => ({
       docId: item.docId,
       source: item.source,
+      kind: item.kind,
       qualityScore: item.qualityScore,
+      relevanceScore: item.relevanceScore,
+      productMatch: item.productMatch,
       promoSignals: item.promoSignals,
       excerpt: item.excerpt,
-      positiveSignals: [],
-      negativeSignals: [],
-      sentimentScore: 0,
+      positiveSignals: item.positiveSignals,
+      negativeSignals: item.negativeSignals,
+      sentimentScore: item.sentimentScore,
     }));
   }, [filteredRankedEvidence, product, selectedSource]);
 
@@ -291,11 +296,10 @@ function ProductDetailContent() {
       return [];
     }
     return [
-      { metric: "Rating", value: normalizePercentValue(product.scientificScore.ratingReliability) },
-      { metric: "Authenticity", value: normalizePercentValue(product.scientificScore.spamAuthenticity) },
-      { metric: "ABSA", value: normalizePercentValue(product.scientificScore.absaAlignment) },
-      { metric: "Visual", value: normalizePercentValue(product.scientificScore.visualReliability) },
-      { metric: "Final", value: normalizePercentValue(product.scientificScore.finalTrust) },
+      { metric: "Fit", value: product.scoreBreakdown.productFit ?? 0 },
+      { metric: "Evidence", value: product.scoreBreakdown.evidenceConfidence ?? 0 },
+      { metric: "Crawl", value: product.scoreBreakdown.crawlHealth ?? 0 },
+      { metric: "Decision", value: product.scoreBreakdown.decisionScore ?? 0 },
     ];
   }, [product]);
   const hasRadarSignal = useMemo(
@@ -325,15 +329,18 @@ function ProductDetailContent() {
     if (!product) {
       return [];
     }
+    const domain = product.productInsight.analysisMode;
+    const coverageTarget = domain === "supplement" ? 4 : 3;
+    const reviewTarget = domain === "supplement" ? 24 : 12;
+    const ratingTarget = domain === "supplement" ? 400 : 250;
     const raw = [
-      { name: "Coverage", value: product.evidenceStats.sourceCoverage },
-      { name: "Reviews", value: product.evidenceStats.reviewCount },
-      { name: "Ratings", value: product.evidenceStats.ratingCount },
+      { name: "Coverage", value: product.evidenceStats.commerceSourceCoverage || product.evidenceStats.sourceCoverage, target: coverageTarget },
+      { name: "Reviews", value: product.evidenceDiagnostics.acceptedReviewCount || product.evidenceStats.reviewCount, target: reviewTarget },
+      { name: "Ratings", value: product.evidenceStats.ratingCount, target: ratingTarget },
     ];
-    const maxValue = Math.max(...raw.map((item) => item.value), 1);
     return raw.map((item) => ({
       ...item,
-      normalized: Math.round((item.value / maxValue) * 100),
+      normalized: Math.min(100, Math.round((item.value / Math.max(1, item.target)) * 100)),
     }));
   }, [product]);
 
@@ -443,12 +450,43 @@ function ProductDetailContent() {
             </div>
           ) : null}
           <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">{product.storeName}</p>
-          <h1 className="mt-4 text-4xl font-semibold tracking-[-0.05em] text-[color:var(--text-strong)] md:text-5xl">
+          <h1
+            className={`mt-4 text-2xl font-semibold leading-8 text-[color:var(--text-strong)] md:text-3xl md:leading-10 ${
+              titleExpanded ? "" : "line-clamp-3"
+            }`}
+          >
             {product.title}
           </h1>
-          <p className="mt-4 max-w-3xl text-sm leading-8 text-[color:var(--text-soft)]">
+          {product.title.length > 140 ? (
+            <button
+              type="button"
+              onClick={() => setTitleExpanded((current) => !current)}
+              className="mt-3 rounded-full border border-[color:var(--border)] px-3 py-1 text-xs uppercase tracking-[0.18em] text-[color:var(--text-muted)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
+            >
+              {titleExpanded ? "Collapse title" : "Expand title"}
+            </button>
+          ) : null}
+          <p
+            className={`mt-4 max-w-4xl text-sm leading-7 text-[color:var(--text-soft)] ${
+              headlineExpanded ? "" : "line-clamp-3"
+            }`}
+          >
             {product.productInsight.headline}
           </p>
+          {product.productInsight.headline.length > 180 ? (
+            <button
+              type="button"
+              onClick={() => setHeadlineExpanded((current) => !current)}
+              className="mt-3 rounded-full border border-[color:var(--border)] px-3 py-1 text-xs uppercase tracking-[0.18em] text-[color:var(--text-muted)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
+            >
+              {headlineExpanded ? "Read less" : "Read more"}
+            </button>
+          ) : null}
+          {product.decisionSummary ? (
+            <p className="mt-3 max-w-4xl text-sm leading-7 text-[color:var(--text-muted)]">
+              {product.decisionSummary}
+            </p>
+          ) : null}
 
           <div className="mt-8 grid gap-4 md:grid-cols-4">
             <div className="rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4">
@@ -456,9 +494,9 @@ function ProductDetailContent() {
               <p className="mt-2 text-3xl font-semibold text-[color:var(--text-strong)]">${product.price.toFixed(2)}</p>
             </div>
             <div className="rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Trust</p>
-              <p className={`mt-2 text-3xl font-semibold ${scoreTone(product.scientificScore.finalTrust)}`}>
-                {product.scientificScore.finalTrust}
+              <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Decision score</p>
+              <p className={`mt-2 text-3xl font-semibold ${scoreTone(product.scoreBreakdown.decisionScore || product.scientificScore.finalTrust)}`}>
+                {product.scoreBreakdown.decisionScore || product.scientificScore.finalTrust}
               </p>
             </div>
             <div className="rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4">
@@ -504,7 +542,7 @@ function ProductDetailContent() {
               href={product.sourceUrl}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-2 rounded-full bg-[color:var(--text-strong)] px-5 py-3 text-sm font-medium text-white transition hover:bg-[color:var(--accent)]"
+              className="inline-flex items-center gap-2 rounded-full border border-[color:var(--accent)] bg-[color:var(--accent-soft)] px-5 py-3 text-sm font-medium text-[color:var(--accent)] transition hover:bg-[color:var(--accent)] hover:text-white"
             >
               Open merchant
               <ExternalLink className="h-4 w-4" />
@@ -605,8 +643,8 @@ function ProductDetailContent() {
         </div>
 
         <div className="rounded-[2.4rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
-          <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Scientific scoring</p>
-          <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Trust profile radar</h2>
+          <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Decision scoring</p>
+          <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Fit, evidence, and crawl radar</h2>
           {hasRadarSignal ? (
             <div className="mt-6 h-80">
               <ResponsiveContainer width="100%" height="100%">
@@ -647,10 +685,19 @@ function ProductDetailContent() {
             </div>
             <div className="rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4">
               <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Promo likelihood</p>
-              <p className={`mt-2 text-2xl font-semibold ${scoreTone(100 - reviewInsights.paidPromoLikelihood)}`}>
-                {reviewInsights.paidPromoLikelihood}%
-              </p>
-              <p className="mt-1 text-sm text-[color:var(--text-soft)]">Lower is better.</p>
+              {reviewInsights.promoLikelihoodStatus === "unknown" || reviewInsights.paidPromoLikelihood == null ? (
+                <>
+                  <p className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Unknown</p>
+                  <p className="mt-1 text-sm text-[color:var(--text-soft)]">Waiting for enough matched review evidence.</p>
+                </>
+              ) : (
+                <>
+                  <p className={`mt-2 text-2xl font-semibold ${scoreTone(100 - reviewInsights.paidPromoLikelihood)}`}>
+                    {reviewInsights.paidPromoLikelihood}%
+                  </p>
+                  <p className="mt-1 text-sm text-[color:var(--text-soft)]">Lower is better.</p>
+                </>
+              )}
             </div>
             <div className="rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4">
               <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Cache posture</p>
@@ -791,7 +838,7 @@ function ProductDetailContent() {
           </div>
 
           <div className="rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
-            <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Review coverage</p>
+            <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Accepted review coverage</p>
             <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Source mix</h2>
             <div className="mt-6 h-72">
               <ResponsiveContainer width="100%" height="100%">
@@ -844,26 +891,28 @@ function ProductDetailContent() {
 
           <div className="rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
             <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Evidence ledger</p>
-            <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Source quality table</h2>
+            <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Accepted evidence table</h2>
             <div className="mt-6 overflow-hidden rounded-[1.5rem] border border-[color:var(--border)]">
-              <div className="grid grid-cols-[minmax(80px,0.2fr)_64px_64px_64px_64px_minmax(0,1fr)] gap-3 bg-[color:var(--surface-strong)] px-4 py-3 text-[11px] uppercase tracking-[0.14em] text-[color:var(--text-muted)]">
+              <div className="grid grid-cols-[minmax(80px,0.18fr)_64px_72px_72px_64px_minmax(0,1fr)] gap-3 bg-[color:var(--surface-strong)] px-4 py-3 text-[11px] uppercase tracking-[0.14em] text-[color:var(--text-muted)]">
                 <span>Source</span>
+                <span>Kind</span>
                 <span>Quality</span>
-                <span>Promo</span>
-                <span>Pos</span>
-                <span>Neg</span>
+                <span>Match</span>
+                <span>Sent</span>
                 <span>Excerpt</span>
               </div>
               {productEvidenceRows.slice(0, 8).map((item) => (
                 <div
                   key={`${item.docId}-${item.source}`}
-                  className="grid grid-cols-[minmax(80px,0.2fr)_64px_64px_64px_64px_minmax(0,1fr)] gap-3 border-t border-[color:var(--border)] px-4 py-4 text-sm"
+                  className="grid grid-cols-[minmax(80px,0.18fr)_64px_72px_72px_64px_minmax(0,1fr)] gap-3 border-t border-[color:var(--border)] px-4 py-4 text-sm"
                 >
                   <span className="font-medium capitalize text-[color:var(--text-strong)]">{item.source}</span>
+                  <span className="capitalize text-[color:var(--text-soft)]">{item.kind}</span>
                   <span className={scoreTone(item.qualityScore)}>{item.qualityScore}</span>
-                  <span className="text-[color:var(--text-soft)]">{item.promoSignals.length}</span>
-                  <span className="text-emerald-700 dark:text-emerald-300">{item.positiveSignals.length}</span>
-                  <span className="text-rose-700 dark:text-rose-300">{item.negativeSignals.length}</span>
+                  <span className="text-[color:var(--text-soft)]">{item.productMatch}</span>
+                  <span className={item.sentimentScore >= 0 ? "text-emerald-700 dark:text-emerald-300" : "text-rose-700 dark:text-rose-300"}>
+                    {item.sentimentScore}
+                  </span>
                   <span className="line-clamp-3 text-[color:var(--text-soft)]" title={item.excerpt || item.docId}>
                     {item.excerpt || item.docId}
                   </span>
