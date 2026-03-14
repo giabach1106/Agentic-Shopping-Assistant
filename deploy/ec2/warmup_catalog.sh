@@ -9,4 +9,4 @@ if [[ ! -f "docker-compose.prod.yml" ]]; then
 fi
 
 docker compose -f docker-compose.prod.yml exec -T backend \
-  python scripts/warmup_supplements_catalog.py --target "${TARGET}"
+  sh -lc "PYTHONPATH=/app python scripts/warmup_supplements_catalog.py --target ${TARGET}"
