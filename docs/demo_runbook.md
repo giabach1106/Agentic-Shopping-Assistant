@@ -37,7 +37,9 @@ npm run dev
 
 ```bash
 cd backend
-python scripts/warmup_supplements_catalog.py --target 1600
+python scripts/warmup_domain_corpus.py --domain supplement --target 1600
+python scripts/warmup_domain_corpus.py --domain chair --target 600
+python scripts/warmup_domain_corpus.py --domain desk --target 600
 ```
 
 Use this when you want richer catalog coverage before traffic or local validation.

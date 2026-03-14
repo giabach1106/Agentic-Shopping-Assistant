@@ -107,7 +107,73 @@ First HTTPS issuance from Caddy may take 1-2 minutes.
 
 ```bash
 chmod +x deploy/ec2/warmup_catalog.sh
-./deploy/ec2/warmup_catalog.sh 1600
+./deploy/ec2/warmup_catalog.sh supplement 1600
+./deploy/ec2/warmup_catalog.sh chair 600
+./deploy/ec2/warmup_catalog.sh desk 600
+```
+
+Default backend entrypoint inside the container:
+
+```bash
+python scripts/warmup_domain_corpus.py --domain supplement --target 1600
+```
+
+## 7.1 Schedule recurring warmups with systemd
+
+Preferred approach on EC2:
+
+Create `/etc/systemd/system/agentic-warmup@.service`
+
+```ini
+[Unit]
+Description=Agentic domain corpus warmup for %i
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/ubuntu/Agentic-Shopping-Assistant
+ExecStart=/home/ubuntu/Agentic-Shopping-Assistant/deploy/ec2/warmup_catalog.sh %i 800
+```
+
+Create `/etc/systemd/system/agentic-warmup@.timer`
+
+```ini
+[Unit]
+Description=Run Agentic warmup timer for %i
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=12h
+Persistent=true
+Unit=agentic-warmup@%i.service
+
+[Install]
+WantedBy=timers.target
+```
+
+Enable timers:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now agentic-warmup@supplement.timer
+sudo systemctl enable --now agentic-warmup@chair.timer
+sudo systemctl enable --now agentic-warmup@desk.timer
+sudo systemctl list-timers 'agentic-warmup@*'
+```
+
+Run one domain immediately:
+
+```bash
+sudo systemctl start agentic-warmup@chair.service
+```
+
+Cron fallback if you do not want systemd timers:
+
+```cron
+0 */12 * * * cd /home/ubuntu/Agentic-Shopping-Assistant && ./deploy/ec2/warmup_catalog.sh supplement 1600 >> /var/log/agentic-warmup-supplement.log 2>&1
+20 */12 * * * cd /home/ubuntu/Agentic-Shopping-Assistant && ./deploy/ec2/warmup_catalog.sh chair 800 >> /var/log/agentic-warmup-chair.log 2>&1
+40 */12 * * * cd /home/ubuntu/Agentic-Shopping-Assistant && ./deploy/ec2/warmup_catalog.sh desk 800 >> /var/log/agentic-warmup-desk.log 2>&1
 ```
 
 ## 8. Redeploy after new commits
