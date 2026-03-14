@@ -92,6 +92,32 @@ def test_unsupported_category_stays_in_discovery_only_mode(client: TestClient) -
     assert payload["state"]["needs_follow_up"] is True
 
 
+def test_unsupported_category_follow_up_keeps_original_brief(client: TestClient) -> None:
+    session_id = _create_session(client)
+
+    first = client.post(
+        "/v1/chat",
+        json={
+            "sessionId": session_id,
+            "message": "Recommend a wireless headset with long battery life and low latency.",
+        },
+    )
+    assert first.status_code == 200
+    first_payload = first.json()
+    assert first_payload["supportLevel"] == "discovery_only"
+    assert first_payload["state"]["constraints"]["category"] == "wireless headset"
+
+    second = client.post(
+        "/v1/chat",
+        json={"sessionId": session_id, "message": "Main use case: daily study and home office."},
+    )
+    assert second.status_code == 200
+    second_payload = second.json()
+    assert second_payload["conversationIntent"] == "shopping_constraints"
+    assert second_payload["state"]["constraints"]["category"] == "wireless headset"
+    assert "wireless headset" in second_payload["reply"].lower()
+
+
 def test_resume_confirmation_can_force_collect(client: TestClient) -> None:
     session_id = _create_session(client)
 

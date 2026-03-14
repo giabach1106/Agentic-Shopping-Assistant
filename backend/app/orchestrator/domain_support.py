@@ -77,6 +77,17 @@ _NOISE_TERMS = {
     "budget",
     "price",
 }
+_GENERIC_CATEGORY_PHRASES = {
+    "a product",
+    "product",
+    "something",
+    "something good",
+    "help finding a product",
+    "finding a product",
+    "shopping help",
+    "help shopping",
+    "recommendation",
+}
 _CHAIR_NEGATIVE_HINTS = (
     "chair cover",
     "seat cover",
@@ -335,7 +346,7 @@ def extract_category_from_message(message: str) -> str | None:
             return category
 
     match = re.search(
-        r"(?:need|want|looking for|find|buy|get|shop for|compare|mua|tim|muon mua)\s+"
+        r"(?:need|want|looking for|find|buy|get|shop for|compare|recommend|suggest|mua|tim|muon mua)\s+"
         r"(?:me\s+)?(?:an?\s+|some\s+)?([a-z0-9][a-z0-9\-\s]{2,80}?)"
         r"(?=\s+(?:under|below|with|delivered|by|exclude|for|and|that)\b|[,.?!]|$)",
         text,
@@ -343,6 +354,8 @@ def extract_category_from_message(message: str) -> str | None:
     if not match:
         return None
     candidate = match.group(1).strip()
+    if candidate in _GENERIC_CATEGORY_PHRASES:
+        return None
     if candidate in {
         "clean ingredients",
         "fast delivery",
@@ -371,6 +384,8 @@ def is_shopping_message(message: str) -> bool:
         "buy",
         "get",
         "shop for",
+        "recommend",
+        "suggest",
         "mua",
         "tim",
         "muon mua",

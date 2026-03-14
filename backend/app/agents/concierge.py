@@ -65,17 +65,23 @@ class ConciergeAgent:
         session_id: str | None = None,
     ) -> dict[str, Any]:
         previous_state = previous_state or {}
-        del history
 
         constraints = dict(previous_state.get("constraints") or {})
         pending_action = self._normalize_pending_action(previous_state.get("pending_action"))
-        existing_category = str(constraints.get("category") or "").strip() or None
-        category_hint = extract_category_from_message(message) or existing_category
+        existing_category = self._sanitize_category(str(constraints.get("category") or "").strip() or None)
+        history_category = self._recent_user_category(history)
+        category_hint = (
+            self._sanitize_category(extract_category_from_message(message))
+            or existing_category
+            or history_category
+        )
         if category_hint and not constraints.get("category"):
             constraints["category"] = canonicalize_category(category_hint)
 
         domain = infer_domain(category_hint or existing_category)
         support_level = self._support_level(domain, category_hint or existing_category)
+        if constraints.get("category") and support_level != "live_analysis":
+            constraints = self._apply_discovery_updates(message, constraints)
         search_ready = bool(previous_state.get("search_ready") or constraints.get("category"))
         clarification_pending = previous_state.get("clarification_pending")
         missing_evidence = [
@@ -108,6 +114,7 @@ class ConciergeAgent:
         intent = await self._classify_intent(
             message=message,
             existing_category=existing_category,
+            history_category=history_category,
             pending_action=pending_action,
             missing_evidence=missing_evidence,
             search_ready=search_ready,
@@ -190,6 +197,7 @@ class ConciergeAgent:
                     domain=domain,
                     support_level=support_level,
                     explicit_follow_up=True,
+                    conversation_intent="shopping_constraints",
                 )
             return self._continue_planner_response(
                 constraints=constraints,
@@ -203,6 +211,7 @@ class ConciergeAgent:
         *,
         message: str,
         existing_category: str | None,
+        history_category: str | None,
         pending_action: dict[str, Any] | None,
         missing_evidence: list[str],
         search_ready: bool,
@@ -220,6 +229,8 @@ class ConciergeAgent:
             return "pending_status"
         if _RESUME_PATTERN.fullmatch(message.strip()) and existing_category:
             return "resume_request"
+        if (existing_category or history_category) and self._looks_like_shopping_follow_up(message):
+            return "shopping_constraints"
         if search_ready and has_structured_constraint_signal(message):
             return "shopping_constraints"
         if clarification_pending and search_ready and existing_category:
@@ -422,8 +433,10 @@ class ConciergeAgent:
         domain: str,
         support_level: str,
         explicit_follow_up: bool,
+        conversation_intent: str = "shopping_discovery",
     ) -> dict[str, Any]:
         category = str(constraints.get("category") or "that product").strip()
+        brief_summary = self._discovery_brief_summary(constraints)
         if domain == "chair":
             reply = (
                 f"I can narrow down {category}. Before I search, tell me your budget and one or two priorities "
@@ -455,10 +468,16 @@ class ConciergeAgent:
                 _action("supp_ingredients", "Need clean ingredients", "Must have clean ingredients and no sucralose.", "reply", "secondary"),
             ]
         else:
-            reply = (
-                f"I can help you refine {category}, but live evidence comparison is only ready for supplements, "
-                "chairs, and desks right now. Tell me your budget and your top priorities, and I will structure the brief."
-            )
+            if brief_summary:
+                reply = (
+                    f"I am structuring the brief for {category}. So far I have {brief_summary}. "
+                    "Live evidence comparison is not ready for this category yet, but I can keep refining the brief."
+                )
+            else:
+                reply = (
+                    f"I can help you refine {category}, but live evidence comparison is only ready for supplements, "
+                    "chairs, and desks right now. Tell me your budget and your top priorities, and I will structure the brief."
+                )
             actions = [
                 _action("generic_budget", "Share budget", "Budget under $200.", "reply", "primary"),
                 _action("generic_use_case", "Share use case", "Main use case: daily study and home office.", "reply", "secondary"),
@@ -466,7 +485,10 @@ class ConciergeAgent:
             ]
 
         if explicit_follow_up:
-            reply = "I still need a bit more detail. " + reply
+            if brief_summary and domain not in {"chair", "desk", "supplement"}:
+                reply = "I captured that update. " + reply
+            else:
+                reply = "I still need a bit more detail. " + reply
 
         return {
             "route": "ask_discovery",
@@ -474,7 +496,7 @@ class ConciergeAgent:
             "status": "NEED_DATA",
             "needsFollowUp": True,
             "conversationMode": "concierge",
-            "conversationIntent": "shopping_discovery",
+            "conversationIntent": conversation_intent,
             "replyKind": "discovery",
             "handledBy": "concierge",
             "nextActions": actions,
@@ -657,6 +679,103 @@ class ConciergeAgent:
             "forceCollect": False,
             "domain": "generic",
         }
+
+    def _recent_user_category(self, history: list[dict[str, Any]]) -> str | None:
+        for item in reversed(history):
+            if str(item.get("role") or "").strip().lower() != "user":
+                continue
+            candidate = self._sanitize_category(extract_category_from_message(str(item.get("content") or "")))
+            if candidate:
+                return candidate
+        return None
+
+    def _sanitize_category(self, value: str | None) -> str | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        if text.lower() in {
+            "a product",
+            "product",
+            "something",
+            "help finding a product",
+            "finding a product",
+            "shopping help",
+            "help shopping",
+        }:
+            return None
+        return text
+
+    def _looks_like_shopping_follow_up(self, message: str) -> bool:
+        normalized = message.strip().lower()
+        if has_structured_constraint_signal(message):
+            return True
+        if ":" in message:
+            return True
+        return bool(
+            re.search(
+                r"\b(use case|main use case|priority|priorities|battery|latency|comfort|gaming|study|home office|work)\b",
+                normalized,
+                re.IGNORECASE,
+            )
+        )
+
+    def _apply_discovery_updates(self, message: str, constraints: dict[str, Any]) -> dict[str, Any]:
+        updated = dict(constraints)
+        normalized = message.strip()
+        budget_match = re.search(
+            r"(?:under|below|budget(?:\s+under)?|max)\s*\$?\s*([0-9][0-9,]*)",
+            normalized,
+            re.IGNORECASE,
+        )
+        if budget_match:
+            updated["budgetMax"] = int(budget_match.group(1).replace(",", ""))
+
+        preference_chunks: list[str] = []
+        use_case_match = re.search(r"(?:main\s+)?use case\s*:\s*(.+)$", normalized, re.IGNORECASE)
+        if use_case_match:
+            preference_chunks.append(f"use case: {use_case_match.group(1).strip()}")
+
+        with_match = re.search(r"\bwith\s+(.+)$", normalized, re.IGNORECASE)
+        if with_match:
+            tail = with_match.group(1).strip().rstrip(".")
+            for chunk in re.split(r",| and ", tail):
+                text = chunk.strip()
+                if len(text) >= 3:
+                    preference_chunks.append(text)
+
+        if not preference_chunks and ":" in normalized:
+            label_match = re.search(r"([A-Za-z ]{3,30})\s*:\s*(.+)$", normalized)
+            if label_match:
+                label = label_match.group(1).strip().lower()
+                value = label_match.group(2).strip()
+                if label not in {"session", "status"} and value:
+                    preference_chunks.append(f"{label}: {value}")
+
+        must_have = [
+            str(item).strip()
+            for item in (updated.get("mustHave") or [])
+            if str(item).strip()
+        ]
+        for chunk in preference_chunks:
+            if chunk not in must_have:
+                must_have.append(chunk)
+        if must_have:
+            updated["mustHave"] = must_have
+        return updated
+
+    def _discovery_brief_summary(self, constraints: dict[str, Any]) -> str:
+        parts: list[str] = []
+        budget = constraints.get("budgetMax")
+        if isinstance(budget, (int, float)) and budget > 0:
+            parts.append(f"a budget under ${int(budget)}")
+        preferences = [
+            str(item).strip()
+            for item in (constraints.get("mustHave") or [])
+            if str(item).strip()
+        ][:2]
+        if preferences:
+            parts.append("priorities like " + ", ".join(preferences))
+        return ", ".join(parts)
 
     def _support_level(self, domain: str, category: str | None) -> str:
         if not category:

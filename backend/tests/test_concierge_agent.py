@@ -184,3 +184,48 @@ def test_concierge_can_reopen_crawl_confirmation_after_prior_attempt() -> None:
         assert result["pendingAction"]["type"] == "crawl_more"
 
     asyncio.run(run_test())
+
+
+def test_concierge_recovers_recent_shopping_category_from_generic_quick_action() -> None:
+    async def run_test() -> None:
+        agent = _agent()
+        result = await agent.run(
+            message="I want help finding a product.",
+            history=[
+                {"role": "user", "content": "Recommend a wireless headset with long battery life and low latency."},
+                {"role": "assistant", "content": "What can I help you with?"},
+            ],
+            previous_state={},
+        )
+        assert result["route"] == "ask_discovery"
+        assert result["supportLevel"] == "discovery_only"
+        assert result["constraints"]["category"] == "wireless headset"
+        assert "wireless headset" in result["reply"].lower()
+
+    asyncio.run(run_test())
+
+
+def test_concierge_keeps_unsupported_brief_during_preference_follow_up() -> None:
+    async def run_test() -> None:
+        agent = _agent()
+        result = await agent.run(
+            message="Main use case: daily study and home office.",
+            history=[],
+            previous_state={
+                "constraints": {
+                    "category": "wireless headset",
+                    "budgetMax": 200,
+                    "mustHave": ["long battery life", "low latency"],
+                },
+                "needs_follow_up": True,
+                "search_ready": True,
+            },
+        )
+        assert result["route"] == "ask_discovery"
+        assert result["conversationIntent"] == "shopping_constraints"
+        assert result["supportLevel"] == "discovery_only"
+        assert result["constraints"]["category"] == "wireless headset"
+        assert any("use case:" in item for item in result["constraints"]["mustHave"])
+        assert "wireless headset" in result["reply"].lower()
+
+    asyncio.run(run_test())
