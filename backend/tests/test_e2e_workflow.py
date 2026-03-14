@@ -40,14 +40,14 @@ def test_e2e_missing_info_then_resume_to_decision(client: TestClient) -> None:
     session_id = _create_session(client)
     turn_1 = client.post(
         "/v1/chat",
-        json={"sessionId": session_id, "message": "I need a chair"},
+        json={"sessionId": session_id, "message": "I need something good"},
     )
     assert turn_1.status_code == 200
     assert turn_1.json()["state"]["needs_follow_up"] is True
 
     turn_2 = client.post(
         f"/v1/runs/{session_id}/resume",
-        json={"message": "under $150, min 4 stars, delivered by friday"},
+        json={"message": "ergonomic chair under $150, min 4 stars, delivered by friday"},
     )
     assert turn_2.status_code == 200
     assert "decision" in turn_2.json()["state"]["agent_outputs"]
@@ -59,6 +59,20 @@ def test_e2e_missing_info_then_resume_to_decision(client: TestClient) -> None:
         assert payload["decision"]["verdict"] in {"BUY", "WAIT", "AVOID"}
     else:
         assert payload["status"] == "NEED_DATA"
+
+
+def test_e2e_category_only_prompt_proceeds_without_blocking(client: TestClient) -> None:
+    session_id = _create_session(client)
+    turn = client.post(
+        "/v1/chat",
+        json={"sessionId": session_id, "message": "Find me whey isolate"},
+    )
+    assert turn.status_code == 200
+    payload = turn.json()
+    assert payload["state"]["needs_follow_up"] is False
+    assert payload["clarificationPending"]["field"] == "budgetMax"
+    assert payload["decision"] is not None
+    assert payload["decision"]["verdict"] in {"BUY", "WAIT", "AVOID"}
 
 
 def test_e2e_automation_blocked_returns_graceful_risk_flag(client: TestClient) -> None:

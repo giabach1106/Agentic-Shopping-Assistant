@@ -4,6 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.orchestrator.domain_support import canonicalize_category
+
 
 class SearchConstraints(BaseModel):
     category: str | None = None
@@ -64,7 +66,8 @@ class SearchConstraints(BaseModel):
     @model_validator(mode="after")
     def normalize_category(self) -> "SearchConstraints":
         if self.category:
-            self.category = self.category.strip().lower()
+            normalized = canonicalize_category(self.category.strip().lower())
+            self.category = normalized or self.category.strip().lower()
             if "http://" in self.category or "https://" in self.category:
                 self.category = None
         if self.delivery_deadline:

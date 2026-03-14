@@ -15,6 +15,28 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4_000)
 
 
+class NextActionResponse(BaseModel):
+    id: str
+    label: str
+    message: str
+    kind: str
+    style: str
+    requires_confirmation: bool = Field(alias="requiresConfirmation")
+
+
+class PendingActionResponse(BaseModel):
+    type: str
+    status: str
+    prompt: str
+    expires_after_turn: int | None = Field(default=None, alias="expiresAfterTurn")
+
+
+class ClarificationPendingResponse(BaseModel):
+    field: str
+    prompt: str
+    example: str | None = None
+
+
 class ChatResponse(BaseModel):
     session_id: str = Field(alias="sessionId")
     status: str
@@ -26,6 +48,17 @@ class ChatResponse(BaseModel):
     trace: list[dict[str, Any]]
     missing_evidence: list[str] = Field(alias="missingEvidence")
     blocking_agents: list[str] = Field(alias="blockingAgents")
+    conversation_mode: str = Field(alias="conversationMode")
+    conversation_intent: str = Field(alias="conversationIntent")
+    reply_kind: str = Field(alias="replyKind")
+    handled_by: str = Field(alias="handledBy")
+    support_level: str = Field(alias="supportLevel")
+    next_actions: list[NextActionResponse] = Field(default_factory=list, alias="nextActions")
+    pending_action: PendingActionResponse | None = Field(default=None, alias="pendingAction")
+    coverage_confidence: str = Field(alias="coverageConfidence")
+    checkout_readiness: str = Field(alias="checkoutReadiness")
+    clarification_pending: ClarificationPendingResponse | None = Field(default=None, alias="clarificationPending")
+    source_health: dict[str, Any] = Field(default_factory=dict, alias="sourceHealth")
     state: dict[str, Any]
 
 
@@ -113,6 +146,19 @@ class EvidenceRowResponse(BaseModel):
     sentiment_score: int = Field(alias="sentimentScore")
 
 
+class ProductInsightAttributeResponse(BaseModel):
+    label: str
+    value: str
+
+
+class ProductInsightResponse(BaseModel):
+    analysis_mode: str = Field(alias="analysisMode")
+    headline: str
+    strengths: list[str]
+    cautions: list[str]
+    key_attributes: list[ProductInsightAttributeResponse] = Field(alias="keyAttributes")
+
+
 class SessionProductResponse(BaseModel):
     product_id: str = Field(alias="productId")
     canonical_product_id: str = Field(alias="canonicalProductId")
@@ -137,6 +183,7 @@ class SessionProductResponse(BaseModel):
     cons: list[str]
     evidence_rows: list[EvidenceRowResponse] = Field(alias="evidenceRows")
     ingredient_analysis: IngredientAnalysisResponse = Field(alias="ingredientAnalysis")
+    product_insight: ProductInsightResponse = Field(alias="productInsight")
     scientific_score: dict[str, Any] = Field(alias="scientificScore")
     evidence_stats: dict[str, Any] = Field(alias="evidenceStats")
     trace: list[dict[str, Any]]
@@ -150,6 +197,7 @@ class SessionProductsEnvelopeResponse(BaseModel):
 class RecommendationResponse(BaseModel):
     session_id: str = Field(alias="sessionId")
     status: str
+    reply: str
     decision: dict[str, Any] | None
     scientific_score: dict[str, Any] = Field(alias="scientificScore")
     evidence_stats: dict[str, Any] = Field(alias="evidenceStats")
@@ -157,6 +205,18 @@ class RecommendationResponse(BaseModel):
     trace: list[dict[str, Any]]
     missing_evidence: list[str] = Field(alias="missingEvidence")
     blocking_agents: list[str] = Field(alias="blockingAgents")
+    conversation_mode: str = Field(alias="conversationMode")
+    conversation_intent: str = Field(alias="conversationIntent")
+    reply_kind: str = Field(alias="replyKind")
+    handled_by: str = Field(alias="handledBy")
+    support_level: str = Field(alias="supportLevel")
+    next_actions: list[NextActionResponse] = Field(default_factory=list, alias="nextActions")
+    pending_action: PendingActionResponse | None = Field(default=None, alias="pendingAction")
+    coverage_confidence: str = Field(alias="coverageConfidence")
+    checkout_readiness: str = Field(alias="checkoutReadiness")
+    clarification_pending: ClarificationPendingResponse | None = Field(default=None, alias="clarificationPending")
+    source_health: dict[str, Any] = Field(default_factory=dict, alias="sourceHealth")
+    state: dict[str, Any]
 
 
 class HealthResponse(BaseModel):

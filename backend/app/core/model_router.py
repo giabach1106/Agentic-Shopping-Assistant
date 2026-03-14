@@ -64,6 +64,7 @@ class ModelRouter:
             )
 
         reason: str | None = None
+        latency_threshold = self._latency_threshold_for_task(task_type)
 
         try:
             primary_result = await self._attempt_with_retries(
@@ -71,14 +72,14 @@ class ModelRouter:
                 task_type=task_type,
                 payload=payload,
             )
-            if primary_result.latency_seconds <= self._settings.latency_threshold_seconds:
+            if primary_result.latency_seconds <= latency_threshold:
                 self._failure_counts[task_type] = 0
                 self._record_metrics(task_type, session_key, primary_result)
                 return primary_result
 
             reason = (
                 f"latency {primary_result.latency_seconds:.2f}s exceeded threshold "
-                f"{self._settings.latency_threshold_seconds:.2f}s"
+                f"{latency_threshold:.2f}s"
             )
             self._logger.warning(
                 "Switching from default model to fallback model for task '%s': %s",
@@ -106,6 +107,14 @@ class ModelRouter:
         fallback_result.fallback_reason = reason
         self._record_metrics(task_type, session_key, fallback_result)
         return fallback_result
+
+    def _latency_threshold_for_task(self, task_type: str) -> float:
+        task_thresholds = self._settings.task_latency_threshold_seconds
+        if isinstance(task_thresholds, dict):
+            value = task_thresholds.get(task_type.lower())
+            if isinstance(value, (float, int)):
+                return float(value)
+        return float(self._settings.latency_threshold_seconds)
 
     def snapshot_metrics(self) -> dict[str, Any]:
         return self._telemetry.snapshot()

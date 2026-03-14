@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import importlib
 import json
 import re
 import time
@@ -22,6 +23,8 @@ from app.collectors.base import (
     VisualRecord,
 )
 from app.core.config import Settings
+from app.orchestrator.domain_support import infer_domain, title_matches_constraints
+from app.orchestrator.search_brief import SearchBrief
 
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -57,25 +60,6 @@ def _safe_int(value: str | None, fallback: int = 0) -> int:
     except ValueError:
         return fallback
 
-
-_SUPPLEMENT_KEYWORDS = (
-    "whey",
-    "protein",
-    "isolate",
-    "supplement",
-    "creatine",
-    "pre workout",
-    "pre-workout",
-    "casein",
-    "collagen",
-    "electrolyte",
-    "vitamin",
-    "omega",
-    "probiotic",
-    "bcaa",
-    "eaa",
-    "glutamine",
-)
 
 _OFF_TOPIC_HINTS = (
     "nba",
@@ -128,11 +112,11 @@ def _decode_html_text(value: str) -> str:
     return _normalize_text(html.unescape(value))
 
 
-def _is_relevant_supplement_text(text: str, query: str) -> bool:
+def _is_relevant_product_text(text: str, query: str) -> bool:
     haystack = f"{text} {query}".lower()
     if any(token in haystack for token in _OFF_TOPIC_HINTS):
         return False
-    return any(token in haystack for token in _SUPPLEMENT_KEYWORDS)
+    return title_matches_constraints(text, {"category": query})
 
 
 def _extract_numeric_price(value: str) -> float | None:
@@ -359,11 +343,310 @@ class DevRealtimeCollector:
         now = _now_iso()
         query_id = uuid.uuid4().hex[:8]
         category = str(constraints.get("category") or "supplement").lower()
-        is_supplement = any(
-            token in category
-            for token in ("whey", "protein", "supplement", "creatine", "preworkout")
-        )
-        if not is_supplement:
+        domain = infer_domain(category)
+        if domain == "chair":
+            return CollectionResult(
+                products=[
+                    ProductCandidateData(
+                        source="amazon",
+                        url="https://www.amazon.com/dp/B0CHAIR001",
+                        title="FlexiPosture Ergonomic Mesh Chair with Adjustable Lumbar Support",
+                        price=149.99,
+                        avg_rating=4.5,
+                        rating_count=812,
+                        shipping_eta="2-4 days",
+                        return_policy="30-day return",
+                        seller_info="Amazon.com Services LLC",
+                        retrieved_at=now,
+                        evidence_id=f"amz-chair-{query_id}-1",
+                        confidence_source=0.86,
+                        raw_snapshot_ref=f"dev://amazon/chair/{query_id}",
+                        image_url="https://images-na.ssl-images-amazon.com/images/I/chair-ergonomic-mesh.jpg",
+                    ),
+                    ProductCandidateData(
+                        source="walmart",
+                        url="https://www.walmart.com/ip/987650001",
+                        title="CampusMesh Study Chair with Flip-Up Arms and Breathable Back",
+                        price=129.0,
+                        avg_rating=4.2,
+                        rating_count=241,
+                        shipping_eta="3-5 days",
+                        return_policy="30-day return",
+                        seller_info="Walmart",
+                        retrieved_at=now,
+                        evidence_id=f"wmt-chair-{query_id}-1",
+                        confidence_source=0.8,
+                        raw_snapshot_ref=f"dev://walmart/chair/{query_id}",
+                        image_url="https://i5.walmartimages.com/seo/campusmesh-chair.jpg",
+                    ),
+                    ProductCandidateData(
+                        source="ebay",
+                        url="https://www.ebay.com/itm/366900000001",
+                        title="StudyPro Ergonomic Desk Chair with Padded Seat and Wheels",
+                        price=118.5,
+                        avg_rating=4.1,
+                        rating_count=96,
+                        shipping_eta="4-6 days",
+                        return_policy="Seller return policy",
+                        seller_info="eBay seller",
+                        retrieved_at=now,
+                        evidence_id=f"eby-chair-{query_id}-1",
+                        confidence_source=0.74,
+                        raw_snapshot_ref=f"dev://ebay/chair/{query_id}",
+                        image_url="https://i.ebayimg.com/images/g/chair-studypro/s-l1600.jpg",
+                    ),
+                ],
+                reviews=[
+                    ReviewRecord(
+                        source="amazon",
+                        url="https://www.amazon.com/dp/B0CHAIR001",
+                        review_id=f"amz-chair-rv-{query_id}-1",
+                        rating=5.0,
+                        review_text=(
+                            "Strong lumbar support, breathable mesh, and stable base for long study sessions."
+                        ),
+                        timestamp=now,
+                        helpful_votes=51,
+                        verified_purchase=True,
+                        media_count=2,
+                        retrieved_at=now,
+                        evidence_id=f"amz-chair-ev-{query_id}-1",
+                        confidence_source=0.9,
+                        raw_snapshot_ref=f"dev://amazon/chair/reviews/{query_id}",
+                    ),
+                    ReviewRecord(
+                        source="reddit",
+                        url="https://www.reddit.com/r/OfficeChairs/comments/devchair/",
+                        review_id=f"rdt-chair-rv-{query_id}-1",
+                        rating=4.0,
+                        review_text=(
+                            "Assembly is manageable in about 30 minutes, but cheaper chairs still wobble if the frame is thin."
+                        ),
+                        timestamp=now,
+                        helpful_votes=27,
+                        verified_purchase=None,
+                        media_count=1,
+                        retrieved_at=now,
+                        evidence_id=f"rdt-chair-ev-{query_id}-1",
+                        confidence_source=0.82,
+                        raw_snapshot_ref=f"dev://reddit/chair/{query_id}",
+                    ),
+                    ReviewRecord(
+                        source="tiktok",
+                        url="https://www.tiktok.com/@desksetup/video/7450000000000000011",
+                        review_id=f"tt-chair-rv-{query_id}-1",
+                        rating=4.0,
+                        review_text=(
+                            "Paid promotion disclosed. The chair looks clean on camera, but the seat cushion compresses a bit after long use."
+                        ),
+                        timestamp=now,
+                        helpful_votes=9,
+                        verified_purchase=None,
+                        media_count=1,
+                        retrieved_at=now,
+                        evidence_id=f"tt-chair-ev-{query_id}-1",
+                        confidence_source=0.68,
+                        raw_snapshot_ref=f"dev://tiktok/chair/{query_id}",
+                    ),
+                ],
+                visuals=[
+                    VisualRecord(
+                        source="amazon",
+                        url="https://www.amazon.com/dp/B0CHAIR001",
+                        image_url="https://images-na.ssl-images-amazon.com/images/I/chair-side-profile.jpg",
+                        caption="Product photo showing adjustable lumbar support and mesh back.",
+                        retrieved_at=now,
+                        evidence_id=f"amz-chair-img-{query_id}-1",
+                        confidence_source=0.88,
+                        raw_snapshot_ref=f"dev://amazon/chair/images/{query_id}",
+                    ),
+                    VisualRecord(
+                        source="reddit",
+                        url="https://www.reddit.com/r/OfficeChairs/comments/devchair/",
+                        image_url="https://i.redd.it/chair-user-photo.jpg",
+                        caption="User photo showing seat depth and armrest position at a study desk.",
+                        retrieved_at=now,
+                        evidence_id=f"rdt-chair-img-{query_id}-1",
+                        confidence_source=0.8,
+                        raw_snapshot_ref=f"dev://reddit/chair/images/{query_id}",
+                    ),
+                ],
+                trace=[
+                    CollectorTraceEvent(
+                        source="amazon",
+                        step="collect_products",
+                        status="ok",
+                        detail=f"Collected dev chair candidates for {category}.",
+                        duration_ms=20,
+                    ),
+                    CollectorTraceEvent(
+                        source="reddit",
+                        step="collect_reviews",
+                        status="ok",
+                        detail="Collected chair review snippets from development dataset.",
+                        duration_ms=18,
+                    ),
+                    CollectorTraceEvent(
+                        source="tiktok",
+                        step="collect_visuals",
+                        status="ok",
+                        detail="Collected creator-sourced chair metadata from development dataset.",
+                        duration_ms=16,
+                    ),
+                ],
+            )
+        if domain == "desk":
+            return CollectionResult(
+                products=[
+                    ProductCandidateData(
+                        source="amazon",
+                        url="https://www.amazon.com/dp/B0DESK0001",
+                        title="Northfield Study Desk 47 Inch with Cable Slot and Storage Shelf",
+                        price=179.99,
+                        avg_rating=4.4,
+                        rating_count=518,
+                        shipping_eta="2-4 days",
+                        return_policy="30-day return",
+                        seller_info="Amazon.com Services LLC",
+                        retrieved_at=now,
+                        evidence_id=f"amz-desk-{query_id}-1",
+                        confidence_source=0.85,
+                        raw_snapshot_ref=f"dev://amazon/desk/{query_id}",
+                        image_url="https://images-na.ssl-images-amazon.com/images/I/desk-northfield.jpg",
+                    ),
+                    ProductCandidateData(
+                        source="walmart",
+                        url="https://www.walmart.com/ip/456780001",
+                        title="CampusOak Writing Desk with Drawer and Lower Shelf",
+                        price=159.0,
+                        avg_rating=4.2,
+                        rating_count=187,
+                        shipping_eta="3-5 days",
+                        return_policy="30-day return",
+                        seller_info="Walmart",
+                        retrieved_at=now,
+                        evidence_id=f"wmt-desk-{query_id}-1",
+                        confidence_source=0.79,
+                        raw_snapshot_ref=f"dev://walmart/desk/{query_id}",
+                        image_url="https://i5.walmartimages.com/seo/campusoak-desk.jpg",
+                    ),
+                    ProductCandidateData(
+                        source="ebay",
+                        url="https://www.ebay.com/itm/366900000777",
+                        title="LiftFrame Standing Desk 48 Inch Home Office Workstation",
+                        price=219.99,
+                        avg_rating=4.3,
+                        rating_count=114,
+                        shipping_eta="4-6 days",
+                        return_policy="Seller return policy",
+                        seller_info="eBay seller",
+                        retrieved_at=now,
+                        evidence_id=f"eby-desk-{query_id}-1",
+                        confidence_source=0.73,
+                        raw_snapshot_ref=f"dev://ebay/desk/{query_id}",
+                        image_url="https://i.ebayimg.com/images/g/desk-standing/s-l1600.jpg",
+                    ),
+                ],
+                reviews=[
+                    ReviewRecord(
+                        source="amazon",
+                        url="https://www.amazon.com/dp/B0DESK0001",
+                        review_id=f"amz-desk-rv-{query_id}-1",
+                        rating=5.0,
+                        review_text=(
+                            "The desk feels sturdy, the top is wide enough for a laptop plus monitor, and assembly is straightforward."
+                        ),
+                        timestamp=now,
+                        helpful_votes=37,
+                        verified_purchase=True,
+                        media_count=2,
+                        retrieved_at=now,
+                        evidence_id=f"amz-desk-ev-{query_id}-1",
+                        confidence_source=0.9,
+                        raw_snapshot_ref=f"dev://amazon/desk/reviews/{query_id}",
+                    ),
+                    ReviewRecord(
+                        source="reddit",
+                        url="https://www.reddit.com/r/battlestations/comments/devdesk/",
+                        review_id=f"rdt-desk-rv-{query_id}-1",
+                        rating=4.0,
+                        review_text=(
+                            "Good value and stable frame, but particleboard tops scratch faster than solid wood if you move gear a lot."
+                        ),
+                        timestamp=now,
+                        helpful_votes=19,
+                        verified_purchase=None,
+                        media_count=1,
+                        retrieved_at=now,
+                        evidence_id=f"rdt-desk-ev-{query_id}-1",
+                        confidence_source=0.81,
+                        raw_snapshot_ref=f"dev://reddit/desk/{query_id}",
+                    ),
+                    ReviewRecord(
+                        source="tiktok",
+                        url="https://www.tiktok.com/@workspace/video/7450000000000000033",
+                        review_id=f"tt-desk-rv-{query_id}-1",
+                        rating=4.0,
+                        review_text=(
+                            "Paid promotion disclosed. Cable management looks clean, but wider desks need more careful assembly than the ad suggests."
+                        ),
+                        timestamp=now,
+                        helpful_votes=8,
+                        verified_purchase=None,
+                        media_count=1,
+                        retrieved_at=now,
+                        evidence_id=f"tt-desk-ev-{query_id}-1",
+                        confidence_source=0.66,
+                        raw_snapshot_ref=f"dev://tiktok/desk/{query_id}",
+                    ),
+                ],
+                visuals=[
+                    VisualRecord(
+                        source="amazon",
+                        url="https://www.amazon.com/dp/B0DESK0001",
+                        image_url="https://images-na.ssl-images-amazon.com/images/I/desk-cable-slot.jpg",
+                        caption="Desk product photo showing cable slot and lower shelf.",
+                        retrieved_at=now,
+                        evidence_id=f"amz-desk-img-{query_id}-1",
+                        confidence_source=0.88,
+                        raw_snapshot_ref=f"dev://amazon/desk/images/{query_id}",
+                    ),
+                    VisualRecord(
+                        source="reddit",
+                        url="https://www.reddit.com/r/battlestations/comments/devdesk/",
+                        image_url="https://i.redd.it/desk-user-setup.jpg",
+                        caption="User setup photo showing depth, width, and monitor fit.",
+                        retrieved_at=now,
+                        evidence_id=f"rdt-desk-img-{query_id}-1",
+                        confidence_source=0.8,
+                        raw_snapshot_ref=f"dev://reddit/desk/images/{query_id}",
+                    ),
+                ],
+                trace=[
+                    CollectorTraceEvent(
+                        source="amazon",
+                        step="collect_products",
+                        status="ok",
+                        detail=f"Collected dev desk candidates for {category}.",
+                        duration_ms=20,
+                    ),
+                    CollectorTraceEvent(
+                        source="reddit",
+                        step="collect_reviews",
+                        status="ok",
+                        detail="Collected desk review snippets from development dataset.",
+                        duration_ms=18,
+                    ),
+                    CollectorTraceEvent(
+                        source="tiktok",
+                        step="collect_visuals",
+                        status="ok",
+                        detail="Collected creator-sourced desk metadata from development dataset.",
+                        duration_ms=16,
+                    ),
+                ],
+            )
+        if domain != "supplement":
             category = "protein supplement"
         products = [
             ProductCandidateData(
@@ -606,28 +889,101 @@ class DevRealtimeCollector:
 
 
 class LiveRealtimeCollector:
-    def __init__(self) -> None:
+    def __init__(self, settings: Settings) -> None:
         self._client = httpx.AsyncClient(
             timeout=12.0,
             follow_redirects=True,
             headers={"User-Agent": _USER_AGENT, "Accept-Language": "en-US,en;q=0.9"},
         )
+        self._settings = settings
 
     async def collect(self, constraints: dict[str, Any]) -> CollectionResult:
-        query = self._build_query(constraints)
-        result = CollectionResult()
+        brief = SearchBrief.from_constraints(constraints)
+        result = CollectionResult(
+            crawl_meta={
+                "searchBrief": brief.to_public_dict(),
+                "queryVariants": dict(brief.query_variants),
+            }
+        )
+        domain = infer_domain(str(constraints.get("category") or brief.category))
 
         tasks = [
-            self._collect_ebay(query, result),
-            self._collect_walmart(query, result),
-            self._collect_amazon(query, result),
-            self._collect_nutritionfaktory(query, result),
-            self._collect_dps(query, result),
-            self._collect_reddit(query, result),
-            self._collect_tiktok(query, result),
+            self._collect_ebay(brief.query_for("ebay"), result),
+            self._collect_walmart(brief.query_for("walmart"), result),
+            self._collect_amazon(brief.query_for("amazon"), result),
+            self._collect_reddit(brief.query_for("reddit"), result),
+            self._collect_tiktok(brief.query_for("tiktok"), result),
         ]
+        if domain == "supplement":
+            tasks.extend(
+                [
+                    self._collect_nutritionfaktory(brief.query_for("nutritionfaktory"), result),
+                    self._collect_dps(brief.query_for("dps"), result),
+                ]
+            )
         await asyncio.gather(*tasks)
+        result.source_health = self._build_source_health(result)
         return result
+
+    def _build_source_health(self, result: CollectionResult) -> dict[str, Any]:
+        source_health: dict[str, Any] = {}
+        for event in result.trace:
+            entry = source_health.setdefault(
+                event.source,
+                {
+                    "source": event.source,
+                    "status": event.status,
+                    "step": event.step,
+                    "detail": event.detail,
+                    "fallbackUsed": False,
+                },
+            )
+            entry["status"] = event.status
+            entry["step"] = event.step
+            entry["detail"] = event.detail
+            if "browser fallback" in event.detail.lower():
+                entry["fallbackUsed"] = True
+        for source in result.blocked_sources:
+            entry = source_health.setdefault(source, {"source": source})
+            entry.setdefault("status", "blocked")
+            entry.setdefault("fallbackUsed", False)
+        return source_health
+
+    async def _browser_fetch(self, url: str) -> str | None:
+        try:
+            playwright_async = importlib.import_module("playwright.async_api")
+        except ImportError:
+            return None
+        async_playwright = getattr(playwright_async, "async_playwright", None)
+        if async_playwright is None:
+            return None
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True)
+            page = await browser.new_page()
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                await page.wait_for_timeout(1200)
+                return await page.content()
+            finally:
+                await browser.close()
+
+    async def _maybe_browser_fallback(
+        self,
+        *,
+        source: str,
+        url: str,
+        body: str,
+        reason: str,
+    ) -> str | None:
+        if source not in {"amazon", "ebay", "walmart", "nutritionfaktory", "dps"}:
+            return None
+        challenge_marker = _detect_marketplace_challenge(source, body)
+        if not challenge_marker and reason == "challenge":
+            return None
+        fallback_body = await self._browser_fetch(url)
+        if not fallback_body:
+            return None
+        return fallback_body
 
     async def _collect_amazon(self, query: str, result: CollectionResult) -> None:
         started = time.perf_counter()
@@ -638,18 +994,38 @@ class LiveRealtimeCollector:
             body = response.text
             challenge_marker = _detect_marketplace_challenge(source, body)
             if challenge_marker:
-                result.missing_evidence.append("amazon.product_list")
-                result.blocked_sources.append(source)
-                result.trace.append(
-                    CollectorTraceEvent(
-                        source=source,
-                        step="collect_products",
-                        status="blocked",
-                        detail=f"Amazon anti-bot challenge detected ({challenge_marker}).",
-                        duration_ms=int((time.perf_counter() - started) * 1000),
-                    )
+                fallback_body = await self._maybe_browser_fallback(
+                    source=source,
+                    url=url,
+                    body=body,
+                    reason="challenge",
                 )
-                return
+                if fallback_body:
+                    body = fallback_body
+                    challenge_marker = _detect_marketplace_challenge(source, body)
+                    if not challenge_marker:
+                        result.trace.append(
+                            CollectorTraceEvent(
+                                source=source,
+                                step="collect_products",
+                                status="warning",
+                                detail="Browser fallback cleared Amazon anti-bot challenge.",
+                                duration_ms=int((time.perf_counter() - started) * 1000),
+                            )
+                        )
+                if challenge_marker:
+                    result.missing_evidence.append("amazon.product_list")
+                    result.blocked_sources.append(source)
+                    result.trace.append(
+                        CollectorTraceEvent(
+                            source=source,
+                            step="collect_products",
+                            status="blocked",
+                            detail=f"Amazon anti-bot challenge detected ({challenge_marker}).",
+                            duration_ms=int((time.perf_counter() - started) * 1000),
+                        )
+                    )
+                    return
             windows = _extract_amazon_result_windows(body)
             now = _now_iso()
             added = 0
@@ -671,7 +1047,7 @@ class LiveRealtimeCollector:
                 rating_value, rating_count_value = _extract_rating_and_count(window)
                 image_url = _extract_amazon_image_url(window)
 
-                if not title or not _is_relevant_supplement_text(title, query):
+                if not title or not _is_relevant_product_text(title, query):
                     continue
 
                 result.products.append(
@@ -769,7 +1145,7 @@ class LiveRealtimeCollector:
                 if not title:
                     continue
                 text = (title + " " + body).strip()
-                if not _is_relevant_supplement_text(text, query):
+                if not _is_relevant_product_text(text, query):
                     continue
                 result.reviews.append(
                     ReviewRecord(
@@ -844,18 +1220,38 @@ class LiveRealtimeCollector:
             body = response.text
             challenge_marker = _detect_marketplace_challenge(source, body)
             if challenge_marker:
-                result.missing_evidence.append("ebay.product_list")
-                result.blocked_sources.append(source)
-                result.trace.append(
-                    CollectorTraceEvent(
-                        source=source,
-                        step="collect_products",
-                        status="blocked",
-                        detail=f"eBay anti-bot challenge detected ({challenge_marker}).",
-                        duration_ms=int((time.perf_counter() - started) * 1000),
-                    )
+                fallback_body = await self._maybe_browser_fallback(
+                    source=source,
+                    url=url,
+                    body=body,
+                    reason="challenge",
                 )
-                return
+                if fallback_body:
+                    body = fallback_body
+                    challenge_marker = _detect_marketplace_challenge(source, body)
+                    if not challenge_marker:
+                        result.trace.append(
+                            CollectorTraceEvent(
+                                source=source,
+                                step="collect_products",
+                                status="warning",
+                                detail="Browser fallback cleared eBay anti-bot challenge.",
+                                duration_ms=int((time.perf_counter() - started) * 1000),
+                            )
+                        )
+                if challenge_marker:
+                    result.missing_evidence.append("ebay.product_list")
+                    result.blocked_sources.append(source)
+                    result.trace.append(
+                        CollectorTraceEvent(
+                            source=source,
+                            step="collect_products",
+                            status="blocked",
+                            detail=f"eBay anti-bot challenge detected ({challenge_marker}).",
+                            duration_ms=int((time.perf_counter() - started) * 1000),
+                        )
+                    )
+                    return
             item_blocks = re.findall(
                 r'(<li[^>]+class="s-item[^"]*"[\s\S]*?</li>)',
                 body,
@@ -901,7 +1297,7 @@ class LiveRealtimeCollector:
                 )
                 if not title or "shop on ebay" in title.lower() or _is_product_label_noise(title):
                     continue
-                if not _is_relevant_supplement_text(title, query):
+                if not _is_relevant_product_text(title, query):
                     continue
 
                 raw_price = price_match.group(1) if price_match else None
@@ -975,7 +1371,7 @@ class LiveRealtimeCollector:
                     if (
                         not title
                         or _is_product_label_noise(title)
-                        or not _is_relevant_supplement_text(title, query)
+                        or not _is_relevant_product_text(title, query)
                     ):
                         continue
                     result.products.append(
@@ -1058,18 +1454,38 @@ class LiveRealtimeCollector:
             body = response.text
             challenge_marker = _detect_marketplace_challenge(source, body)
             if challenge_marker:
-                result.missing_evidence.append("walmart.product_list")
-                result.blocked_sources.append(source)
-                result.trace.append(
-                    CollectorTraceEvent(
-                        source=source,
-                        step="collect_products",
-                        status="blocked",
-                        detail=f"Walmart anti-bot challenge detected ({challenge_marker}).",
-                        duration_ms=int((time.perf_counter() - started) * 1000),
-                    )
+                fallback_body = await self._maybe_browser_fallback(
+                    source=source,
+                    url=url,
+                    body=body,
+                    reason="challenge",
                 )
-                return
+                if fallback_body:
+                    body = fallback_body
+                    challenge_marker = _detect_marketplace_challenge(source, body)
+                    if not challenge_marker:
+                        result.trace.append(
+                            CollectorTraceEvent(
+                                source=source,
+                                step="collect_products",
+                                status="warning",
+                                detail="Browser fallback cleared Walmart anti-bot challenge.",
+                                duration_ms=int((time.perf_counter() - started) * 1000),
+                            )
+                        )
+                if challenge_marker:
+                    result.missing_evidence.append("walmart.product_list")
+                    result.blocked_sources.append(source)
+                    result.trace.append(
+                        CollectorTraceEvent(
+                            source=source,
+                            step="collect_products",
+                            status="blocked",
+                            detail=f"Walmart anti-bot challenge detected ({challenge_marker}).",
+                            duration_ms=int((time.perf_counter() - started) * 1000),
+                        )
+                    )
+                    return
             candidate_matches = re.findall(
                 r'"name":"([^"]{8,220})"[\s\S]{0,500}?"canonicalUrl":"(/ip/[^"]+)"[\s\S]{0,500}?"price":([0-9]+(?:\.[0-9]+)?)',
                 body,
@@ -1096,7 +1512,7 @@ class LiveRealtimeCollector:
                 if (
                     not clean_title
                     or _is_product_label_noise(clean_title)
-                    or not _is_relevant_supplement_text(clean_title, query)
+                    or not _is_relevant_product_text(clean_title, query)
                 ):
                     continue
                 item_url = f"https://www.walmart.com{rel_url.split('?')[0]}"
@@ -1176,7 +1592,7 @@ class LiveRealtimeCollector:
                     if (
                         not clean_title
                         or _is_product_label_noise(clean_title)
-                        or not _is_relevant_supplement_text(clean_title, query)
+                        or not _is_relevant_product_text(clean_title, query)
                     ):
                         continue
                     item_url = f"https://www.walmart.com{rel_url.split('?')[0]}"
@@ -1260,18 +1676,38 @@ class LiveRealtimeCollector:
             body = response.text
             challenge_marker = _detect_marketplace_challenge(source, body)
             if challenge_marker:
-                result.missing_evidence.append("nutritionfaktory.product_list")
-                result.blocked_sources.append(source)
-                result.trace.append(
-                    CollectorTraceEvent(
-                        source=source,
-                        step="collect_products",
-                        status="blocked",
-                        detail=f"NutritionFaktory anti-bot challenge detected ({challenge_marker}).",
-                        duration_ms=int((time.perf_counter() - started) * 1000),
-                    )
+                fallback_body = await self._maybe_browser_fallback(
+                    source=source,
+                    url=url,
+                    body=body,
+                    reason="challenge",
                 )
-                return
+                if fallback_body:
+                    body = fallback_body
+                    challenge_marker = _detect_marketplace_challenge(source, body)
+                    if not challenge_marker:
+                        result.trace.append(
+                            CollectorTraceEvent(
+                                source=source,
+                                step="collect_products",
+                                status="warning",
+                                detail="Browser fallback cleared NutritionFaktory anti-bot challenge.",
+                                duration_ms=int((time.perf_counter() - started) * 1000),
+                            )
+                        )
+                if challenge_marker:
+                    result.missing_evidence.append("nutritionfaktory.product_list")
+                    result.blocked_sources.append(source)
+                    result.trace.append(
+                        CollectorTraceEvent(
+                            source=source,
+                            step="collect_products",
+                            status="blocked",
+                            detail=f"NutritionFaktory anti-bot challenge detected ({challenge_marker}).",
+                            duration_ms=int((time.perf_counter() - started) * 1000),
+                        )
+                    )
+                    return
 
             payloads = _extract_json_ld_payloads(body)
             now = _now_iso()
@@ -1294,12 +1730,12 @@ class LiveRealtimeCollector:
 
                     title = _decode_html_text(str(product.get("name") or ""))
                     slug_title = _title_from_url_slug(item_url)
-                    if not _is_relevant_supplement_text(title, query):
+                    if not _is_relevant_product_text(title, query):
                         title = f"{slug_title} {title}".strip()
                     if (
                         not title
                         or _is_product_label_noise(title)
-                        or not _is_relevant_supplement_text(title, query)
+                        or not _is_relevant_product_text(title, query)
                     ):
                         continue
 
@@ -1415,18 +1851,38 @@ class LiveRealtimeCollector:
             body = response.text
             challenge_marker = _detect_marketplace_challenge(source, body)
             if challenge_marker:
-                result.missing_evidence.append("dps.product_list")
-                result.blocked_sources.append(source)
-                result.trace.append(
-                    CollectorTraceEvent(
-                        source=source,
-                        step="collect_products",
-                        status="blocked",
-                        detail=f"DPS anti-bot challenge detected ({challenge_marker}).",
-                        duration_ms=int((time.perf_counter() - started) * 1000),
-                    )
+                fallback_body = await self._maybe_browser_fallback(
+                    source=source,
+                    url=url,
+                    body=body,
+                    reason="challenge",
                 )
-                return
+                if fallback_body:
+                    body = fallback_body
+                    challenge_marker = _detect_marketplace_challenge(source, body)
+                    if not challenge_marker:
+                        result.trace.append(
+                            CollectorTraceEvent(
+                                source=source,
+                                step="collect_products",
+                                status="warning",
+                                detail="Browser fallback cleared DPS anti-bot challenge.",
+                                duration_ms=int((time.perf_counter() - started) * 1000),
+                            )
+                        )
+                if challenge_marker:
+                    result.missing_evidence.append("dps.product_list")
+                    result.blocked_sources.append(source)
+                    result.trace.append(
+                        CollectorTraceEvent(
+                            source=source,
+                            step="collect_products",
+                            status="blocked",
+                            detail=f"DPS anti-bot challenge detected ({challenge_marker}).",
+                            duration_ms=int((time.perf_counter() - started) * 1000),
+                        )
+                    )
+                    return
 
             payloads = _extract_json_ld_payloads(body)
             now = _now_iso()
@@ -1448,12 +1904,12 @@ class LiveRealtimeCollector:
                     seen_urls.add(item_url)
 
                     title = _decode_html_text(str(product.get("name") or ""))
-                    if not _is_relevant_supplement_text(title, query):
+                    if not _is_relevant_product_text(title, query):
                         title = _title_from_url_slug(item_url)
                     if (
                         not title
                         or _is_product_label_noise(title)
-                        or not _is_relevant_supplement_text(title, query)
+                        or not _is_relevant_product_text(title, query)
                     ):
                         continue
 
@@ -1633,16 +2089,11 @@ class LiveRealtimeCollector:
             )
 
     def _build_query(self, constraints: dict[str, Any]) -> str:
-        category = str(constraints.get("category") or "product").strip()
-        must_have = constraints.get("mustHave") or []
-        clauses = [category]
-        if isinstance(must_have, list) and must_have:
-            clauses.append(" ".join(str(item) for item in must_have[:3]))
-        return " ".join(item for item in clauses if item).strip()
+        return SearchBrief.from_constraints(constraints).query_for("default")
 
 
 def build_realtime_collector(settings: Settings) -> RealtimeCollector:
     mode = settings.runtime_mode.lower().strip()
     if mode == "prod":
-        return LiveRealtimeCollector()
+        return LiveRealtimeCollector(settings)
     return DevRealtimeCollector()

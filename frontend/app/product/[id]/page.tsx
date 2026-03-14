@@ -303,9 +303,16 @@ function ProductDetailContent() {
     [radarData]
   );
 
-  const ingredientBars = useMemo(() => {
+  const insightBars = useMemo(() => {
     if (!product) {
       return [];
+    }
+    if (product.productInsight.analysisMode !== "supplement") {
+      return [
+        { name: "Strengths", value: product.productInsight.strengths.length },
+        { name: "Cautions", value: product.productInsight.cautions.length },
+        { name: "Attributes", value: product.productInsight.keyAttributes.length },
+      ];
     }
     return [
       { name: "Beneficial", value: product.ingredientAnalysis.beneficialSignals.length },
@@ -440,7 +447,7 @@ function ProductDetailContent() {
             {product.title}
           </h1>
           <p className="mt-4 max-w-3xl text-sm leading-8 text-[color:var(--text-soft)]">
-            {product.ingredientAnalysis.summary}
+            {product.productInsight.headline}
           </p>
 
           <div className="mt-8 grid gap-4 md:grid-cols-4">
@@ -455,25 +462,39 @@ function ProductDetailContent() {
               </p>
             </div>
             <div className="rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Ingredient score</p>
-              <p className={`mt-2 text-3xl font-semibold ${scoreTone(product.ingredientAnalysis.score)}`}>
-                {product.ingredientAnalysis.score}
+              <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                {product.productInsight.analysisMode === "supplement" ? "Ingredient score" : "Insight mode"}
+              </p>
+              <p className={`mt-2 text-3xl font-semibold ${product.productInsight.analysisMode === "supplement" ? scoreTone(product.ingredientAnalysis.score) : "text-[color:var(--text-strong)]"}`}>
+                {product.productInsight.analysisMode === "supplement"
+                  ? product.ingredientAnalysis.score
+                  : product.productInsight.analysisMode}
               </p>
               <ul className="mt-3 space-y-1 text-xs text-[color:var(--text-soft)]">
-                {product.ingredientAnalysis.beneficialSignals.slice(0, 1).map((signal) => (
-                  <li key={`metric-good-${signal.ingredient}`}>• +8 {signal.ingredient}</li>
-                ))}
-                {product.ingredientAnalysis.redFlags.slice(0, 1).map((signal) => (
-                  <li key={`metric-risk-${signal.ingredient}`} className="text-rose-700 dark:text-rose-300">
-                    • -10 {signal.ingredient}
-                  </li>
-                ))}
+                {product.productInsight.analysisMode === "supplement"
+                  ? product.ingredientAnalysis.beneficialSignals.slice(0, 1).map((signal) => (
+                      <li key={`metric-good-${signal.ingredient}`}>+8 {signal.ingredient}</li>
+                    ))
+                  : product.productInsight.strengths.slice(0, 2).map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                {product.productInsight.analysisMode === "supplement"
+                  ? product.ingredientAnalysis.redFlags.slice(0, 1).map((signal) => (
+                      <li key={`metric-risk-${signal.ingredient}`} className="text-rose-700 dark:text-rose-300">
+                        -10 {signal.ingredient}
+                      </li>
+                    ))
+                  : null}
               </ul>
             </div>
             <div className="rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Protein source</p>
+              <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                {product.productInsight.analysisMode === "supplement" ? "Protein source" : "Primary focus"}
+              </p>
               <p className="mt-2 text-lg font-semibold text-[color:var(--text-strong)]">
-                {product.ingredientAnalysis.proteinSource}
+                {product.productInsight.analysisMode === "supplement"
+                  ? product.ingredientAnalysis.proteinSource
+                  : product.productInsight.keyAttributes[0]?.value || "general"}
               </p>
             </div>
           </div>
@@ -508,6 +529,18 @@ function ProductDetailContent() {
                 {product.returnPolicy}
               </div>
             ) : null}
+          </div>
+
+          <div className="mt-6 grid gap-3 md:grid-cols-3">
+            {product.productInsight.keyAttributes.slice(0, 6).map((item) => (
+              <div
+                key={`${item.label}-${item.value}`}
+                className="rounded-[1.3rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3"
+              >
+                <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--text-muted)]">{item.label}</p>
+                <p className="mt-2 text-sm font-medium text-[color:var(--text-strong)]">{item.value}</p>
+              </div>
+            ))}
           </div>
 
           <div className="mt-8 rounded-[1.8rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-5">
@@ -637,39 +670,67 @@ function ProductDetailContent() {
           <div className="rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
             <div className="mb-5 flex items-center justify-between gap-3">
               <div>
-                <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Ingredients</p>
-                <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Signals and flags</h2>
+                <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">
+                  {product.productInsight.analysisMode === "supplement" ? "Ingredients" : "Product insight"}
+                </p>
+                <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">
+                  {product.productInsight.analysisMode === "supplement" ? "Signals and flags" : "Strengths and cautions"}
+                </h2>
               </div>
               <FlaskConical className="h-5 w-5 text-[color:var(--accent)]" />
             </div>
 
             <div className="grid gap-4 lg:grid-cols-2">
               <div className="rounded-[1.7rem] border border-emerald-500/20 bg-emerald-500/10 p-5">
-                <p className="text-xs uppercase tracking-[0.2em] text-emerald-700 dark:text-emerald-300">Beneficial</p>
+                <p className="text-xs uppercase tracking-[0.2em] text-emerald-700 dark:text-emerald-300">
+                  {product.productInsight.analysisMode === "supplement" ? "Beneficial" : "Strengths"}
+                </p>
                 <div className="mt-4 space-y-3">
-                  {product.ingredientAnalysis.beneficialSignals.map((signal) => (
-                    <div key={`${signal.ingredient}-${signal.note}`} className="rounded-[1.2rem] bg-[color:var(--surface)] px-4 py-3">
-                      <p className="text-sm font-semibold text-[color:var(--text-strong)]">{signal.ingredient}</p>
-                      <p className="mt-1 text-sm text-[color:var(--text-soft)]">{signal.note}</p>
-                    </div>
-                  ))}
-                  {!product.ingredientAnalysis.beneficialSignals.length ? (
-                    <p className="text-sm text-[color:var(--text-soft)]">No beneficial signals detected.</p>
+                  {product.productInsight.analysisMode === "supplement"
+                    ? product.ingredientAnalysis.beneficialSignals.map((signal) => (
+                        <div key={`${signal.ingredient}-${signal.note}`} className="rounded-[1.2rem] bg-[color:var(--surface)] px-4 py-3">
+                          <p className="text-sm font-semibold text-[color:var(--text-strong)]">{signal.ingredient}</p>
+                          <p className="mt-1 text-sm text-[color:var(--text-soft)]">{signal.note}</p>
+                        </div>
+                      ))
+                    : product.productInsight.strengths.map((item) => (
+                        <div key={item} className="rounded-[1.2rem] bg-[color:var(--surface)] px-4 py-3">
+                          <p className="text-sm text-[color:var(--text-soft)]">{item}</p>
+                        </div>
+                      ))}
+                  {!(product.productInsight.analysisMode === "supplement"
+                    ? product.ingredientAnalysis.beneficialSignals.length
+                    : product.productInsight.strengths.length) ? (
+                    <p className="text-sm text-[color:var(--text-soft)]">No strengths surfaced yet.</p>
                   ) : null}
                 </div>
               </div>
 
               <div className="rounded-[1.7rem] border border-rose-500/20 bg-rose-500/10 p-5">
-                <p className="text-xs uppercase tracking-[0.2em] text-rose-700 dark:text-rose-300">Red flags</p>
+                <p className="text-xs uppercase tracking-[0.2em] text-rose-700 dark:text-rose-300">
+                  {product.productInsight.analysisMode === "supplement" ? "Red flags" : "Cautions"}
+                </p>
                 <div className="mt-4 space-y-3">
-                  {product.ingredientAnalysis.redFlags.map((signal) => (
-                    <div key={`${signal.ingredient}-${signal.note}`} className="rounded-[1.2rem] bg-[color:var(--surface)] px-4 py-3">
-                      <p className="text-sm font-semibold text-[color:var(--text-strong)]">{signal.ingredient}</p>
-                      <p className="mt-1 text-sm text-[color:var(--text-soft)]">{signal.note}</p>
-                    </div>
-                  ))}
-                  {!product.ingredientAnalysis.redFlags.length ? (
-                    <p className="text-sm text-[color:var(--text-soft)]">No material ingredient flags detected.</p>
+                  {product.productInsight.analysisMode === "supplement"
+                    ? product.ingredientAnalysis.redFlags.map((signal) => (
+                        <div key={`${signal.ingredient}-${signal.note}`} className="rounded-[1.2rem] bg-[color:var(--surface)] px-4 py-3">
+                          <p className="text-sm font-semibold text-[color:var(--text-strong)]">{signal.ingredient}</p>
+                          <p className="mt-1 text-sm text-[color:var(--text-soft)]">{signal.note}</p>
+                        </div>
+                      ))
+                    : product.productInsight.cautions.map((item) => (
+                        <div key={item} className="rounded-[1.2rem] bg-[color:var(--surface)] px-4 py-3">
+                          <p className="text-sm text-[color:var(--text-soft)]">{item}</p>
+                        </div>
+                      ))}
+                  {!(product.productInsight.analysisMode === "supplement"
+                    ? product.ingredientAnalysis.redFlags.length
+                    : product.productInsight.cautions.length) ? (
+                    <p className="text-sm text-[color:var(--text-soft)]">
+                      {product.productInsight.analysisMode === "supplement"
+                        ? "No material ingredient flags detected."
+                        : "No major cautions surfaced yet."}
+                    </p>
                   ) : null}
                 </div>
               </div>
@@ -681,7 +742,7 @@ function ProductDetailContent() {
             <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Signal distribution</h2>
             <div className="mt-6 h-72">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={ingredientBars} barSize={42}>
+                <BarChart data={insightBars} barSize={42}>
                   <CartesianGrid vertical={false} stroke="var(--border)" />
                   <XAxis dataKey="name" tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
                   <YAxis allowDecimals={false} tick={{ fill: "currentColor", fontSize: 12 }} axisLine={false} tickLine={false} />
@@ -858,3 +919,4 @@ export default function ProductDetailPage() {
     </Suspense>
   );
 }
+

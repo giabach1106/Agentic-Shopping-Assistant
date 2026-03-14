@@ -90,6 +90,8 @@ class CollectionResult:
     trace: list[CollectorTraceEvent] = field(default_factory=list)
     missing_evidence: list[str] = field(default_factory=list)
     blocked_sources: list[str] = field(default_factory=list)
+    source_health: dict[str, Any] = field(default_factory=dict)
+    crawl_meta: dict[str, Any] = field(default_factory=dict)
 
     def to_public_dict(self) -> dict[str, Any]:
         return {
@@ -99,6 +101,8 @@ class CollectionResult:
             "trace": [item.to_public_dict() for item in self.trace],
             "missingEvidence": list(self.missing_evidence),
             "blockedSources": list(self.blocked_sources),
+            "sourceHealth": dict(self.source_health),
+            "crawlMeta": dict(self.crawl_meta),
         }
 
 

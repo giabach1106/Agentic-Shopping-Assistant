@@ -1,4 +1,30 @@
 export type AgentStatus = "OK" | "NEED_DATA" | "ERROR" | "CREATED";
+export type ConversationMode = "concierge" | "shopping_analysis";
+export type ReplyKind = "answer" | "discovery" | "confirmation_request" | "status_update" | "analysis_result";
+export type SupportLevel = "live_analysis" | "discovery_only" | "unsupported";
+export type CoverageConfidence = "strong" | "limited" | "weak";
+
+export interface ClarificationPending {
+  field: string;
+  prompt: string;
+  example?: string | null;
+}
+
+export interface NextAction {
+  id: string;
+  label: string;
+  message: string;
+  kind: "reply" | "confirm" | "cancel" | "continue";
+  style: "primary" | "secondary" | "subtle";
+  requiresConfirmation: boolean;
+}
+
+export interface PendingAction {
+  type: "crawl_more" | "enable_autofill" | "resume_analysis";
+  status: "awaiting_user" | "confirmed" | "cancelled";
+  prompt: string;
+  expiresAfterTurn?: number | null;
+}
 
 export interface CreateSessionResponse {
   sessionId: string;
@@ -16,6 +42,17 @@ export interface ChatResponse {
   trace: TraceEvent[];
   missingEvidence: string[];
   blockingAgents: string[];
+  conversationMode: ConversationMode;
+  conversationIntent: string;
+  replyKind: ReplyKind;
+  handledBy: string;
+  supportLevel: SupportLevel;
+  nextActions: NextAction[];
+  pendingAction: PendingAction | null;
+  coverageConfidence: CoverageConfidence;
+  checkoutReadiness: string;
+  clarificationPending: ClarificationPending | null;
+  sourceHealth: Record<string, unknown>;
   state: Record<string, unknown>;
 }
 
@@ -39,9 +76,12 @@ export interface ScientificScore {
 
 export interface EvidenceStats {
   sourceCoverage: number;
+  commerceSourceCoverage: number;
   freshnessSeconds: number;
   reviewCount: number;
   ratingCount: number;
+  candidateCount?: number;
+  blockedCommerceSources?: string[];
   missingFields: string[];
 }
 
@@ -56,7 +96,29 @@ export interface SessionMessage {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
-  meta?: Record<string, unknown> | null;
+  meta?: AssistantMessageMeta | null;
+}
+
+export interface AssistantMessageMeta {
+  summary?: string;
+  verdict?: string | null;
+  trust?: number | null;
+  topReasons?: string[];
+  missingEvidence?: string[];
+  blockingAgents?: string[];
+  traceRef?: string;
+  traceCount?: number;
+  conversationMode?: ConversationMode;
+  conversationIntent?: string;
+  replyKind?: ReplyKind;
+  handledBy?: string;
+  supportLevel?: SupportLevel;
+  nextActions?: NextAction[];
+  pendingAction?: PendingAction | null;
+  clarificationPending?: ClarificationPending | null;
+  coverageConfidence?: CoverageConfidence;
+  checkoutReadiness?: string;
+  sourceHealth?: Record<string, unknown>;
 }
 
 export interface SessionSnapshotResponse {
@@ -96,6 +158,19 @@ export interface IngredientAnalysis {
   references: string[];
 }
 
+export interface ProductInsightAttribute {
+  label: string;
+  value: string;
+}
+
+export interface ProductInsight {
+  analysisMode: "supplement" | "furniture" | "generic";
+  headline: string;
+  strengths: string[];
+  cautions: string[];
+  keyAttributes: ProductInsightAttribute[];
+}
+
 export interface CandidateProduct {
   title: string;
   sourceUrl: string;
@@ -131,6 +206,7 @@ export interface SessionProduct {
   cons: string[];
   evidenceRows?: EvidenceRow[];
   ingredientAnalysis: IngredientAnalysis;
+  productInsight: ProductInsight;
   scientificScore: ScientificScore;
   evidenceStats: EvidenceStats;
   trace: TraceEvent[];
@@ -178,12 +254,40 @@ export interface CoverageAudit {
   isSufficient: boolean;
   missing: string[];
   sourceCoverage: number;
+  commerceSourceCoverage?: number;
   reviewCount: number;
   ratingCount: number;
+  candidateCount?: number;
   freshnessSeconds: number;
+  blockedCommerceSources?: string[];
   cacheStatus?: string;
   catalogStatus?: string;
   crawlPerformed?: boolean;
+}
+
+export interface RecommendationResponse {
+  sessionId: string;
+  status: AgentStatus;
+  reply: string;
+  decision: AgentDecision | null;
+  scientificScore: ScientificScore;
+  evidenceStats: EvidenceStats;
+  coverageAudit: CoverageAudit;
+  trace: TraceEvent[];
+  missingEvidence: string[];
+  blockingAgents: string[];
+  conversationMode: ConversationMode;
+  conversationIntent: string;
+  replyKind: ReplyKind;
+  handledBy: string;
+  supportLevel: SupportLevel;
+  nextActions: NextAction[];
+  pendingAction: PendingAction | null;
+  coverageConfidence: CoverageConfidence;
+  checkoutReadiness: string;
+  clarificationPending: ClarificationPending | null;
+  sourceHealth: Record<string, unknown>;
+  state: Record<string, unknown>;
 }
 
 export interface CatalogMetricsResponse {

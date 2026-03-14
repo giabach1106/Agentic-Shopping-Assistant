@@ -4,6 +4,11 @@ import { AlertTriangle, CheckCircle2, LoaderCircle, ShieldAlert } from "lucide-r
 
 import type { TraceEvent } from "@/lib/contracts";
 
+type TraceGroup = {
+  event: TraceEvent;
+  repeatCount: number;
+};
+
 function statusMeta(status: string) {
   const normalized = status.toLowerCase();
   if (normalized === "ok") {
@@ -35,6 +40,22 @@ export function TracePanel({ trace }: { trace: TraceEvent[] }) {
     return null;
   }
 
+  const groups: TraceGroup[] = [];
+  for (const event of trace) {
+    const previous = groups[groups.length - 1];
+    if (
+      previous &&
+      (previous.event.agent ?? "") === (event.agent ?? "") &&
+      previous.event.step === event.step &&
+      previous.event.status === event.status &&
+      (previous.event.detail ?? "") === (event.detail ?? "")
+    ) {
+      previous.repeatCount += 1;
+      continue;
+    }
+    groups.push({ event, repeatCount: 1 });
+  }
+
   return (
     <section className="rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
       <div className="mb-5 flex items-center justify-between gap-3">
@@ -43,12 +64,12 @@ export function TracePanel({ trace }: { trace: TraceEvent[] }) {
           <h2 className="text-xl font-semibold text-[color:var(--text-strong)]">Structured reasoning timeline</h2>
         </div>
         <span className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--text-muted)]">
-          {trace.length} steps
+          {groups.length} groups / {trace.length} steps
         </span>
       </div>
 
       <div className="space-y-4">
-        {trace.map((event, index) => {
+        {groups.map(({ event, repeatCount }, index) => {
           const meta = statusMeta(event.status);
           return (
             <div
@@ -72,6 +93,11 @@ export function TracePanel({ trace }: { trace: TraceEvent[] }) {
                   <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
                     {event.step.replaceAll("_", " ")}
                   </span>
+                  {repeatCount > 1 ? (
+                    <span className="rounded-full border border-[color:var(--border)] px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-[color:var(--text-muted)]">
+                      x{repeatCount}
+                    </span>
+                  ) : null}
                   <span className={`rounded-full border px-2 py-1 text-[10px] uppercase tracking-[0.18em] ${meta.className}`}>
                     {event.status}
                   </span>

@@ -2,6 +2,7 @@ import type {
   CatalogMetricsResponse,
   ChatResponse,
   CreateSessionResponse,
+  RecommendationResponse,
   SessionListResponse,
   SessionProductsResponse,
   SessionSnapshotResponse,
@@ -211,7 +212,7 @@ export async function getSessionProducts(sessionId: string) {
 }
 
 export async function getRecommendation(sessionId: string) {
-  return request<ChatResponse>(`/v1/recommendations/${sessionId}`);
+  return request<RecommendationResponse>(`/v1/recommendations/${sessionId}`);
 }
 
 export async function runChat(sessionId: string, message: string) {

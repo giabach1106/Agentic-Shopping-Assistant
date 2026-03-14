@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -43,6 +43,28 @@ def _as_csv_tuple(value: str | None, default: tuple[str, ...]) -> tuple[str, ...
     return items or default
 
 
+def _as_task_threshold_map(
+    value: str | None,
+    default: dict[str, float],
+) -> dict[str, float]:
+    thresholds = dict(default)
+    if value is None:
+        return thresholds
+    for raw_item in value.split(","):
+        item = raw_item.strip()
+        if not item or "=" not in item:
+            continue
+        task, raw_threshold = item.split("=", 1)
+        task_name = task.strip().lower()
+        if not task_name:
+            continue
+        try:
+            thresholds[task_name] = float(raw_threshold.strip())
+        except ValueError:
+            continue
+    return thresholds
+
+
 @dataclass(slots=True)
 class Settings:
     app_name: str
@@ -67,6 +89,9 @@ class Settings:
     max_estimated_cost_per_session_usd: float
     estimated_cost_per_call_pro_usd: float
     estimated_cost_per_call_lite_usd: float
+    task_latency_threshold_seconds: dict[str, float] = field(
+        default_factory=lambda: {"decision": 12.0}
+    )
     runtime_mode: str = "dev"
     min_review_count: int = 3
     min_rating_count: int = 10
@@ -112,6 +137,10 @@ class Settings:
             model_timeout_seconds=float(os.getenv("MODEL_TIMEOUT_SECONDS", "10")),
             latency_threshold_seconds=float(
                 os.getenv("MODEL_LATENCY_THRESHOLD_SECONDS", "6")
+            ),
+            task_latency_threshold_seconds=_as_task_threshold_map(
+                os.getenv("MODEL_LATENCY_THRESHOLD_SECONDS_BY_TASK"),
+                default={"decision": 12.0},
             ),
             max_retries=max(1, int(os.getenv("MODEL_MAX_RETRIES", "2"))),
             mock_model=_as_bool(os.getenv("MOCK_MODEL"), default=True),

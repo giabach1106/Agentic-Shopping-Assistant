@@ -10,7 +10,7 @@ def test_resume_requires_follow_up_message_when_checkpoint_waits(client: TestCli
 
     first_turn = client.post(
         "/v1/chat",
-        json={"sessionId": session_id, "message": "I need a chair"},
+        json={"sessionId": session_id, "message": "I need something good"},
     )
     assert first_turn.status_code == 200
     assert first_turn.json()["state"]["needs_follow_up"] is True

@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.agents.concierge import ConciergeAgent
 from app.agents.stubs import (
     CoverageAuditorAgent,
     DecisionAgent,
@@ -24,6 +25,7 @@ from app.memory.redis_checkpoint import RedisCheckpointStore
 from app.memory.session_service import SessionService
 from app.memory.sqlite_store import SQLiteSessionStore
 from app.orchestrator.graph import AgentOrchestrator
+from app.orchestrator.project_profile import build_project_profile
 from app.rag.providers import build_rag_service
 from app.services.ingredient_analysis import IngredientAnalyzer
 from app.tools.ui_executor import build_ui_executor
@@ -39,6 +41,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     model_router = ModelRouter(resolved_settings)
     ui_executor = build_ui_executor(resolved_settings, model_router)
+    project_profile = build_project_profile(resolved_settings)
+    concierge = ConciergeAgent(model_router, project_profile)
     planner = PlannerAgent(model_router)
     evidence_store = SQLiteEvidenceStore(resolved_settings.sqlite_path)
     coverage_audit = CoverageAuditorAgent(resolved_settings, evidence_store)
@@ -59,6 +63,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     decision = DecisionAgent(model_router, resolved_settings)
 
     orchestrator = AgentOrchestrator(
+        concierge=concierge,
         planner=planner,
         coverage_audit=coverage_audit,
         collect=collect,

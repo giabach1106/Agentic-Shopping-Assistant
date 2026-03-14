@@ -26,6 +26,7 @@ from app.models.schemas import (
     VoiceConsultRequest,
     VoiceConsultResponse,
 )
+from app.orchestrator.domain_support import analysis_mode_for_domain, infer_domain
 from app.orchestrator.message_formatter import build_assistant_meta
 from app.services.token_auth import (
     decode_claims_without_verification,
@@ -319,6 +320,101 @@ def _derive_product_pros_cons(
     return pros[:4], cons[:4]
 
 
+def _truncate_list(values: list[str], limit: int = 4) -> list[str]:
+    return [str(item).strip() for item in values if str(item).strip()][:limit]
+
+
+def _build_product_insight(
+    *,
+    domain: str,
+    title: str,
+    primary_offer: dict[str, Any],
+    offers: list[dict[str, Any]],
+    ingredient_analysis: dict[str, Any],
+    pros: list[str],
+    cons: list[str],
+    constraint_tier: str,
+) -> dict[str, Any]:
+    analysis_mode = analysis_mode_for_domain(domain)
+    rating_text = (
+        f"{_safe_float(primary_offer.get('rating'), 0.0):.1f} stars"
+        if _safe_float(primary_offer.get("rating"), 0.0) > 0
+        else "rating signal still thin"
+    )
+    common_attributes = [
+        {"label": "Price", "value": f"${_safe_float(primary_offer.get('price'), 0.0):.2f}"},
+        {"label": "Rating", "value": rating_text},
+        {"label": "Shipping", "value": str(primary_offer.get("shippingETA") or "unknown")},
+        {"label": "Returns", "value": str(primary_offer.get("returnPolicy") or "unknown")},
+        {"label": "Offer coverage", "value": f"{len(offers)} offers"},
+        {"label": "Constraint tier", "value": constraint_tier},
+    ]
+
+    if analysis_mode == "supplement":
+        strengths = _truncate_list(
+            [str(item.get("note") or "") for item in ingredient_analysis.get("beneficialSignals", [])]
+            + pros
+        )
+        cautions = _truncate_list(
+            [str(item.get("note") or "") for item in ingredient_analysis.get("redFlags", [])]
+            + cons
+        )
+        return {
+            "analysisMode": analysis_mode,
+            "headline": str(ingredient_analysis.get("summary") or "Ingredient evidence is limited for this product."),
+            "strengths": strengths or ["No strong ingredient positives surfaced yet."],
+            "cautions": cautions or ["No major ingredient cautions surfaced yet."],
+            "keyAttributes": [
+                {"label": "Protein source", "value": str(ingredient_analysis.get("proteinSource") or "unknown")},
+                *common_attributes[:5],
+            ],
+        }
+
+    if analysis_mode == "furniture":
+        strengths = _truncate_list(pros) or [
+            "Best current signals lean on comfort, setup, and delivery evidence."
+        ]
+        cautions = _truncate_list(cons) or [
+            "Review coverage is still limited, so check fit and assembly details before buying."
+        ]
+        if domain == "chair":
+            headline = (
+                f"{title} currently looks strongest for ergonomic daily use, with {rating_text} "
+                f"and shipping around {primary_offer.get('shippingETA') or 'unknown'}."
+            )
+            attributes = [
+                {"label": "Focus", "value": "Ergonomics and daily seating"},
+                *common_attributes[:5],
+            ]
+        else:
+            headline = (
+                f"{title} currently looks strongest for study or home-office setup, with {rating_text} "
+                f"and shipping around {primary_offer.get('shippingETA') or 'unknown'}."
+            )
+            attributes = [
+                {"label": "Focus", "value": "Workspace utility and stability"},
+                *common_attributes[:5],
+            ]
+        return {
+            "analysisMode": analysis_mode,
+            "headline": headline,
+            "strengths": strengths,
+            "cautions": cautions,
+            "keyAttributes": attributes,
+        }
+
+    return {
+        "analysisMode": analysis_mode,
+        "headline": (
+            f"{title} is currently in discovery-only mode. "
+            "Use the session chat to refine the brief before trusting this result."
+        ),
+        "strengths": _truncate_list(pros) or ["Use the session chat to add the most important requirements."],
+        "cautions": _truncate_list(cons) or ["Live evidence comparison is not enabled for this category yet."],
+        "keyAttributes": common_attributes[:4],
+    }
+
+
 def _offer_sort_key(offer: dict[str, Any]) -> tuple[int, int, int, float, float]:
     rating_count = _safe_int(offer.get("ratingCount"), 0)
     rating_value = _safe_float(offer.get("rating"), 0.0)
@@ -334,6 +430,8 @@ def _offer_sort_key(offer: dict[str, Any]) -> tuple[int, int, int, float, float]
 def _build_session_products(checkpoint: dict[str, Any], services: ServiceContainer) -> dict[str, Any]:
     agent_outputs = dict(checkpoint.get("agent_outputs") or {})
     collection = dict(checkpoint.get("collection") or {})
+    constraints = dict(checkpoint.get("constraints") or {})
+    domain = infer_domain(str(constraints.get("category") or ""))
     price = dict(agent_outputs.get("price") or {})
     review = dict(agent_outputs.get("review") or {})
     decision_block = dict(agent_outputs.get("decision") or {})
@@ -498,6 +596,16 @@ def _build_session_products(checkpoint: dict[str, Any], services: ServiceContain
                 unique_refs.append(ref)
         constraint_tier = str(candidate.get("constraintTier") or "strict").strip() or "strict"
         constraint_relaxed = bool(candidate.get("constraintRelaxed") or constraint_tier != "strict")
+        product_insight = _build_product_insight(
+            domain=domain,
+            title=title,
+            primary_offer=primary_offer,
+            offers=merged_offers,
+            ingredient_analysis=analysis,
+            pros=derived_pros,
+            cons=derived_cons,
+            constraint_tier=constraint_tier,
+        )
         items.append(
             {
                 "productId": _product_id(canonical_key, unique_refs),
@@ -536,6 +644,7 @@ def _build_session_products(checkpoint: dict[str, Any], services: ServiceContain
                 "cons": derived_cons,
                 "evidenceRows": evidence_rows,
                 "ingredientAnalysis": analysis,
+                "productInsight": product_insight,
                 "scientificScore": decision_block.get("scientificScore", {}),
                 "evidenceStats": decision_block.get("evidenceStats", {}),
                 "trace": decision_block.get("trace", []),
@@ -643,6 +752,17 @@ async def chat(request: Request, payload: ChatRequest) -> ChatResponse:
             missing_evidence=orchestration.missing_evidence,
             blocking_agents=orchestration.blocking_agents,
             trace=orchestration.trace,
+            conversation_mode=orchestration.conversation_mode,
+            conversation_intent=orchestration.conversation_intent,
+            reply_kind=orchestration.reply_kind,
+            handled_by=orchestration.handled_by,
+            support_level=orchestration.support_level,
+            next_actions=orchestration.next_actions,
+            pending_action=orchestration.pending_action,
+            clarification_pending=orchestration.clarification_pending,
+            coverage_confidence=orchestration.coverage_confidence,
+            checkout_readiness=orchestration.checkout_readiness,
+            source_health=orchestration.source_health,
         ),
     )
     await services.session_service.save_state(payload.session_id, orchestration.state)
@@ -658,6 +778,17 @@ async def chat(request: Request, payload: ChatRequest) -> ChatResponse:
         trace=orchestration.trace,
         missingEvidence=orchestration.missing_evidence,
         blockingAgents=orchestration.blocking_agents,
+        conversationMode=orchestration.conversation_mode,
+        conversationIntent=orchestration.conversation_intent,
+        replyKind=orchestration.reply_kind,
+        handledBy=orchestration.handled_by,
+        supportLevel=orchestration.support_level,
+        nextActions=orchestration.next_actions,
+        pendingAction=orchestration.pending_action,
+        coverageConfidence=orchestration.coverage_confidence,
+        checkoutReadiness=orchestration.checkout_readiness,
+        clarificationPending=orchestration.clarification_pending,
+        sourceHealth=orchestration.source_health,
         state=orchestration.state,
     )
 
@@ -713,6 +844,17 @@ async def resume_run(
             missing_evidence=orchestration.missing_evidence,
             blocking_agents=orchestration.blocking_agents,
             trace=orchestration.trace,
+            conversation_mode=orchestration.conversation_mode,
+            conversation_intent=orchestration.conversation_intent,
+            reply_kind=orchestration.reply_kind,
+            handled_by=orchestration.handled_by,
+            support_level=orchestration.support_level,
+            next_actions=orchestration.next_actions,
+            pending_action=orchestration.pending_action,
+            clarification_pending=orchestration.clarification_pending,
+            coverage_confidence=orchestration.coverage_confidence,
+            checkout_readiness=orchestration.checkout_readiness,
+            source_health=orchestration.source_health,
         ),
     )
     await services.session_service.save_state(session_id, orchestration.state)
@@ -728,6 +870,17 @@ async def resume_run(
         trace=orchestration.trace,
         missingEvidence=orchestration.missing_evidence,
         blockingAgents=orchestration.blocking_agents,
+        conversationMode=orchestration.conversation_mode,
+        conversationIntent=orchestration.conversation_intent,
+        replyKind=orchestration.reply_kind,
+        handledBy=orchestration.handled_by,
+        supportLevel=orchestration.support_level,
+        nextActions=orchestration.next_actions,
+        pendingAction=orchestration.pending_action,
+        coverageConfidence=orchestration.coverage_confidence,
+        checkoutReadiness=orchestration.checkout_readiness,
+        clarificationPending=orchestration.clarification_pending,
+        sourceHealth=orchestration.source_health,
         state=orchestration.state,
     )
 
@@ -816,6 +969,7 @@ async def get_recommendation(
     return RecommendationResponse(
         sessionId=session_id,
         status=decision.get("status", "ERROR"),
+        reply=str(checkpoint.get("reply") or ""),
         decision=decision.get("decision"),
         scientificScore=decision.get("scientificScore", {}),
         evidenceStats=decision.get("evidenceStats", {}),
@@ -823,6 +977,18 @@ async def get_recommendation(
         trace=decision.get("trace", []),
         missingEvidence=decision.get("missingEvidence", []),
         blockingAgents=decision.get("blockingAgents", []),
+        conversationMode=str(checkpoint.get("conversation_mode") or "shopping_analysis"),
+        conversationIntent=str(checkpoint.get("conversation_intent") or "shopping_constraints"),
+        replyKind=str(checkpoint.get("reply_kind") or "analysis_result"),
+        handledBy=str(checkpoint.get("handled_by") or "decision"),
+        supportLevel=str(checkpoint.get("support_level") or "unsupported"),
+        nextActions=list(checkpoint.get("next_actions", [])),
+        pendingAction=checkpoint.get("pending_action"),
+        coverageConfidence=str(decision.get("coverageConfidence") or "weak"),
+        checkoutReadiness=str(decision.get("checkoutReadiness") or "unknown"),
+        clarificationPending=checkpoint.get("clarification_pending"),
+        sourceHealth=dict(checkpoint.get("source_health") or decision.get("sourceHealth") or {}),
+        state=checkpoint,
     )
 
 

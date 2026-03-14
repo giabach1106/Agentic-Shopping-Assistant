@@ -16,3 +16,20 @@ class ShoppingState(TypedDict):
     missing_evidence: list[str]
     blocking_agents: list[str]
     reply: str
+    conversation_mode: str
+    conversation_intent: str
+    reply_kind: str
+    handled_by: str
+    next_actions: list[dict[str, Any]]
+    pending_action: dict[str, Any] | None
+    support_level: str
+    force_collect: bool
+    domain: str
+    action_history: dict[str, dict[str, Any]]
+    clarification_pending: dict[str, Any] | None
+    clarification_asked_count: int
+    search_ready: bool
+    source_health: dict[str, Any]
+    crawl_meta: dict[str, Any]
+    coverage_confidence: str
+    checkout_readiness: str

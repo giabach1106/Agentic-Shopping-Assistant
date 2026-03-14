@@ -122,11 +122,15 @@ def test_evidence_collection_agent_reuses_cached_collection(tmp_path: Path) -> N
 
         first = await agent.run({"category": "whey protein"})
         second = await agent.run({"category": "whey protein"})
+        cached = await store.get_cached_collection({"category": "whey protein"})
 
         assert calls == 1
-        assert first["cacheStatus"] == "miss"
+        assert first["cacheStatus"] in {"miss", "merged"}
         assert second["cacheStatus"] == "hit"
         assert second["sourceCoverage"] == 2
+        assert second["collection"]["trace"] == []
+        assert cached is not None
+        assert cached["collection"].get("trace", []) == []
 
     asyncio.run(run_test())
 

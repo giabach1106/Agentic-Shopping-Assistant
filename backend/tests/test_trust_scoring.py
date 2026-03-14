@@ -270,3 +270,46 @@ def test_trust_scoring_fail_closed_in_prod_mode_when_required_evidence_missing()
     assert result.status == "NEED_DATA"
     assert result.decision is None
     assert set(result.blocking_agents) >= {"collect", "review", "visual", "price"}
+
+
+def test_executor_not_realtime_does_not_block_ranked_products_in_prod() -> None:
+    engine = TrustScoringEngine(_settings(runtime_mode="prod"))
+    result = engine.evaluate(
+        agent_outputs={
+            "collect": {
+                "sourceCoverage": 3,
+                "commerceSourceCoverage": 1,
+                "reviewCount": 8,
+                "ratingCount": 120,
+                "sufficiency": {"isSufficient": False, "missing": ["sourceCoverage"]},
+            },
+            "review": {
+                "reviewCount": 8,
+                "confidence": 0.7,
+                "paidPromoLikelihood": 0.15,
+                "evidenceQualityScore": 0.8,
+                "duplicateReviewClusters": [],
+                "ratingSummary": {"avgRating": 4.5, "ratingCount": 120, "positiveCount": 90},
+                "absaSignals": {"comfort": 0.4, "durability": 0.3, "delivery": 0.1},
+            },
+            "visual": {"status": "OK", "authenticityScore": 80, "confidence": 0.7, "mismatchFlags": [], "visualRisks": []},
+            "price": {
+                "checkoutReadiness": "mock",
+                "blockers": ["executor_not_realtime"],
+                "candidates": [
+                    {
+                        "title": "Chair",
+                        "sourceUrl": "https://example.com/chair",
+                        "price": 129.99,
+                        "shippingETA": "unknown",
+                        "returnPolicy": "30-day return",
+                    }
+                ],
+            },
+        },
+        constraints={"category": "ergonomic chair", "budgetMax": 150},
+    )
+    assert result.status == "OK"
+    assert result.decision is not None
+    assert result.coverage_confidence == "limited"
+    assert result.decision.verdict == "WAIT"

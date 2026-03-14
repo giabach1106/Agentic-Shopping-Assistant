@@ -76,3 +76,22 @@ def test_model_router_enforces_session_call_budget() -> None:
             )
 
     asyncio.run(run_test())
+
+
+def test_model_router_uses_task_specific_latency_threshold() -> None:
+    async def run_test() -> None:
+        calls: list[str] = []
+
+        async def fake_invoke(model_id: str, *_args):
+            calls.append(model_id)
+            await asyncio.sleep(0.6)
+            return {"text": "ok"}
+
+        router = ModelRouter(_settings(), invoke_fn=fake_invoke)
+        result = await router.call(task_type="decision", payload={"prompt": "hello"})
+
+        assert result.model_id == "pro-model"
+        assert result.fallback_used is False
+        assert calls == ["pro-model"]
+
+    asyncio.run(run_test())

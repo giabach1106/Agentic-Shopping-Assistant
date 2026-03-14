@@ -53,6 +53,9 @@ class TrustScoreResult:
     trace: list[dict[str, Any]]
     missing_evidence: list[str]
     blocking_agents: list[str]
+    coverage_confidence: str
+    checkout_readiness: str
+    source_health: dict[str, Any]
 
     def to_public_dict(self) -> dict[str, Any]:
         return {
@@ -64,6 +67,9 @@ class TrustScoreResult:
             "trace": self.trace,
             "missingEvidence": self.missing_evidence,
             "blockingAgents": self.blocking_agents,
+            "coverageConfidence": self.coverage_confidence,
+            "checkoutReadiness": self.checkout_readiness,
+            "sourceHealth": self.source_health,
         }
 
 
@@ -111,6 +117,12 @@ class TrustScoringEngine:
             or coverage_audit_payload.get("blockedCommerceSources")
             or []
         )
+        source_health = dict(
+            collect.get("sourceHealth")
+            or coverage_audit_payload.get("sourceHealth")
+            or {}
+        )
+        checkout_readiness = str(price.get("checkoutReadiness") or "unknown")
         visual_status = str(visual.get("status") or "NEED_MORE_EVIDENCE").upper()
         collect_sufficiency = dict(collect.get("sufficiency") or {})
         audit_sufficiency = dict(coverage_audit_payload.get("sufficiency") or {})
@@ -123,22 +135,31 @@ class TrustScoringEngine:
         raw_candidates = price.get("candidates")
         candidate_count = len(raw_candidates) if isinstance(raw_candidates, list) else 0
         has_catalog_depth = candidate_count >= 5
+        coverage_confidence = self._coverage_confidence(
+            coverage_is_sufficient=coverage_is_sufficient,
+            candidate_count=candidate_count,
+            commerce_source_coverage=commerce_source_coverage,
+            review_count=review_count,
+            rating_count=rating_count,
+            blocked_commerce_sources=blocked_commerce_sources,
+        )
 
-        if review_count < self._settings.min_review_count and not has_catalog_depth:
-            missing_evidence.append("reviewCount")
-            blocking_agents.append("review")
-        if rating_count < self._settings.min_rating_count and not has_catalog_depth:
-            missing_evidence.append("ratingCount")
-            blocking_agents.append("review")
-        if commerce_source_coverage < self._settings.min_source_coverage and candidate_count < 10:
-            missing_evidence.append("sourceCoverage")
-            blocking_agents.append("collect")
-        if visual_status == "NEED_MORE_EVIDENCE":
-            missing_evidence.append("visualEvidence")
-            blocking_agents.append("visual")
-        if "executor_not_realtime" in (price.get("blockers") or []):
-            missing_evidence.append("realtimeExecutor")
+        if candidate_count == 0:
+            missing_evidence.append("realtimeProducts")
             blocking_agents.append("price")
+        if coverage_confidence == "weak":
+            if commerce_source_coverage < self._settings.min_source_coverage:
+                missing_evidence.append("sourceCoverage")
+                blocking_agents.append("collect")
+            if review_count < self._settings.min_review_count:
+                missing_evidence.append("reviewCount")
+                blocking_agents.append("review")
+            if rating_count < self._settings.min_rating_count and not has_catalog_depth:
+                missing_evidence.append("ratingCount")
+                blocking_agents.append("review")
+            if visual_status == "NEED_MORE_EVIDENCE" and candidate_count == 0:
+                missing_evidence.append("visualEvidence")
+                blocking_agents.append("visual")
 
         missing_evidence = sorted(set(missing_evidence))
         blocking_agents = sorted(set(blocking_agents))
@@ -177,6 +198,8 @@ class TrustScoringEngine:
             "ratedCoverageRatio": round(rated_coverage_ratio, 4),
             "blockedCommerceSources": blocked_commerce_sources,
             "missingFields": missing_evidence,
+            "coverageConfidence": coverage_confidence,
+            "checkoutReadiness": checkout_readiness,
         }
         coverage_audit = {
             "isSufficient": coverage_is_sufficient,
@@ -197,10 +220,12 @@ class TrustScoringEngine:
             "cacheStatus": collect.get("cacheStatus") or coverage_audit_payload.get("cacheStatus"),
             "catalogStatus": collect.get("catalogStatus") or coverage_audit_payload.get("catalogStatus"),
             "crawlPerformed": bool(collect.get("crawlPerformed")),
+            "coverageConfidence": coverage_confidence,
+            "sourceHealth": source_health,
         }
         trace = self._build_trace(agent_outputs)
 
-        if missing_evidence and self._settings.runtime_mode == "prod":
+        if coverage_confidence == "weak" and self._settings.runtime_mode == "prod":
             return TrustScoreResult(
                 status="NEED_DATA",
                 decision=None,
@@ -210,6 +235,9 @@ class TrustScoringEngine:
                 trace=trace,
                 missing_evidence=missing_evidence,
                 blocking_agents=blocking_agents,
+                coverage_confidence=coverage_confidence,
+                checkout_readiness=checkout_readiness,
+                source_health=source_health,
             )
 
         verdict = "AVOID"
@@ -218,6 +246,8 @@ class TrustScoringEngine:
         elif final_trust >= 55:
             verdict = "WAIT"
         if verdict == "AVOID" and candidate_count >= 5 and rated_coverage_ratio < 0.6:
+            verdict = "WAIT"
+        if coverage_confidence == "limited" and verdict == "BUY":
             verdict = "WAIT"
 
         risk_flags = [str(item) for item in review.get("riskFlags", [])]
@@ -230,6 +260,10 @@ class TrustScoringEngine:
         if missing_evidence:
             risk_flags.append(
                 "Data completeness below quality gate: " + ", ".join(missing_evidence)
+            )
+        if checkout_readiness != "live":
+            risk_flags.append(
+                f"Checkout handoff readiness is {checkout_readiness}; recommendation is based on evidence, not checkout automation."
             )
 
         top_reasons = [
@@ -245,6 +279,7 @@ class TrustScoringEngine:
                 f"Visual confidence {round(100 * visual_reliability, 1)}/100 "
                 f"with source coverage at {source_coverage}."
             ),
+            f"Coverage confidence is {coverage_confidence} with {candidate_count} normalized offers.",
         ]
         if candidate_count >= 5 and rated_coverage_ratio < 0.6:
             top_reasons.insert(
@@ -264,6 +299,7 @@ class TrustScoringEngine:
                 f"reviewCount={review_count}, ratingCount={rating_count}, "
                 f"ratedCoverageRatio={round(rated_coverage_ratio, 4)}"
             ),
+            f"coverageConfidence={coverage_confidence}, checkoutReadiness={checkout_readiness}",
         ]
         decision = DecisionPayload(
             verdict=verdict,
@@ -283,7 +319,32 @@ class TrustScoringEngine:
             trace=trace,
             missing_evidence=missing_evidence,
             blocking_agents=blocking_agents,
+            coverage_confidence=coverage_confidence,
+            checkout_readiness=checkout_readiness,
+            source_health=source_health,
         )
+
+    def _coverage_confidence(
+        self,
+        *,
+        coverage_is_sufficient: bool,
+        candidate_count: int,
+        commerce_source_coverage: int,
+        review_count: int,
+        rating_count: int,
+        blocked_commerce_sources: list[str],
+    ) -> str:
+        if candidate_count <= 0:
+            return "weak"
+        if coverage_is_sufficient:
+            return "strong"
+        if commerce_source_coverage >= 2 and review_count >= self._settings.min_review_count:
+            return "strong"
+        if commerce_source_coverage >= 1:
+            return "limited"
+        if blocked_commerce_sources and rating_count > 0:
+            return "limited"
+        return "weak"
 
     def _rating_reliability_score(self, review: dict[str, Any]) -> float:
         summary = dict(review.get("ratingSummary") or {})

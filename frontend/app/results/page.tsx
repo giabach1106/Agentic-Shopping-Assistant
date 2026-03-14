@@ -44,7 +44,15 @@ import {
   runChat,
   storeSessionId,
 } from "@/lib/api-client";
-import type { ChatResponse, SessionMessage, SessionProduct, SessionSnapshotResponse } from "@/lib/contracts";
+import type {
+  AssistantMessageMeta,
+  ChatResponse,
+  NextAction,
+  RecommendationResponse,
+  SessionMessage,
+  SessionProduct,
+  SessionSnapshotResponse,
+} from "@/lib/contracts";
 import { buildReferenceLinks, getCollectionInsights, getReviewInsights } from "@/lib/session-analytics";
 
 type RenderMessage = SessionMessage & {
@@ -120,6 +128,26 @@ function tierLabel(tier: string | null | undefined) {
   return "strict";
 }
 
+function actionButtonClass(style: NextAction["style"]) {
+  if (style === "primary") {
+    return "bg-[color:var(--accent)] text-white hover:opacity-90";
+  }
+  if (style === "secondary") {
+    return "border border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--text-strong)] hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]";
+  }
+  return "border border-transparent bg-[color:var(--surface-strong)] text-[color:var(--text-soft)] hover:text-[color:var(--text-strong)]";
+}
+
+function coverageConfidenceClass(confidence: string) {
+  if (confidence === "strong") {
+    return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+  }
+  if (confidence === "limited") {
+    return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300";
+  }
+  return "border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300";
+}
+
 function evidenceSentiment(excerpt: string) {
   const lowered = excerpt.toLowerCase();
   const positive = [
@@ -175,7 +203,7 @@ async function loadSessionBundle(
     throw snapshotResult.reason;
   }
 
-  let recommendation: ChatResponse | null = null;
+  let recommendation: RecommendationResponse | null = null;
   if (recommendationResult.status === "fulfilled") {
     recommendation = recommendationResult.value;
   } else if (!isNotFound(recommendationResult.reason)) {
@@ -236,7 +264,7 @@ function ResultsContent() {
 
   const [activeSessionId, setActiveSessionId] = useState<string | null>(sessionParam);
   const [snapshot, setSnapshot] = useState<SessionSnapshotResponse | null>(null);
-  const [recommendation, setRecommendation] = useState<ChatResponse | null>(null);
+  const [recommendation, setRecommendation] = useState<RecommendationResponse | ChatResponse | null>(null);
   const [products, setProducts] = useState<SessionProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -244,6 +272,8 @@ function ResultsContent() {
   const [chatInput, setChatInput] = useState("");
   const [optimisticMessages, setOptimisticMessages] = useState<RenderMessage[]>([]);
   const [thinkingStageIndex, setThinkingStageIndex] = useState(0);
+  const [desktopRailOpen, setDesktopRailOpen] = useState(true);
+  const [mobileRailOpen, setMobileRailOpen] = useState(false);
   const bootKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -430,6 +460,68 @@ function ResultsContent() {
         .find((message) => message.role === "assistant" && message.content.trim().length > 0),
     [messages]
   );
+  const latestAssistantMeta = useMemo(
+    () => (latestAssistantMessage?.meta as AssistantMessageMeta | null) ?? null,
+    [latestAssistantMessage?.meta]
+  );
+  const checkpointConversation = useMemo(
+    () =>
+      ((snapshot?.checkpointState as {
+        reply_kind?: string;
+        support_level?: string;
+        conversation_mode?: string;
+        conversation_intent?: string;
+        pending_action?: unknown;
+        clarification_pending?: unknown;
+        next_actions?: NextAction[];
+      } | null) ?? null),
+    [snapshot?.checkpointState]
+  );
+  const activeReplyKind =
+    recommendation?.replyKind ||
+    latestAssistantMeta?.replyKind ||
+    checkpointConversation?.reply_kind ||
+    "answer";
+  const activeSupportLevel =
+    recommendation?.supportLevel ||
+    latestAssistantMeta?.supportLevel ||
+    checkpointConversation?.support_level ||
+    "unsupported";
+  const activePendingAction =
+    recommendation?.pendingAction ||
+    latestAssistantMeta?.pendingAction ||
+    null;
+  const activeClarificationPending =
+    recommendation?.clarificationPending ||
+    latestAssistantMeta?.clarificationPending ||
+    ((checkpointConversation?.clarification_pending as
+      | { field?: string; prompt?: string; example?: string | null }
+      | null) ??
+      null);
+  const quickActions: NextAction[] =
+    recommendation?.nextActions?.length
+      ? recommendation.nextActions
+      : latestAssistantMeta?.nextActions?.length
+        ? latestAssistantMeta.nextActions
+        : checkpointConversation?.next_actions?.length
+          ? checkpointConversation.next_actions
+          : [];
+  const activeCoverageConfidence =
+    recommendation?.coverageConfidence ||
+    latestAssistantMeta?.coverageConfidence ||
+    "weak";
+  const activeCheckoutReadiness =
+    recommendation?.checkoutReadiness ||
+    latestAssistantMeta?.checkoutReadiness ||
+    "unknown";
+  const commerceCoverage =
+    recommendation?.evidenceStats.commerceSourceCoverage ??
+    recommendation?.coverageAudit?.commerceSourceCoverage ??
+    0;
+  const totalSourceCoverage =
+    recommendation?.evidenceStats.sourceCoverage ??
+    recommendation?.coverageAudit?.sourceCoverage ??
+    0;
   const agentReplyText =
     recommendation?.reply ||
     latestAssistantMessage?.content ||
@@ -473,8 +565,225 @@ function ResultsContent() {
     [reviewInsights.rankedEvidence]
   );
 
-  async function sendChatMessage() {
-    const outgoing = chatInput.trim();
+  function renderLiveSessionRail(mode: "desktop" | "mobile") {
+    const isMobile = mode === "mobile";
+
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="border-b border-[color:var(--border)] px-5 py-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Live session</p>
+              <h2 className="mt-2 text-xl font-semibold text-[color:var(--text-strong)]">Shopping copilot</h2>
+              <p className="mt-2 text-sm leading-6 text-[color:var(--text-soft)]">
+                Clarifications, crawl confirmations, and session follow-up live here.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => (isMobile ? setMobileRailOpen(false) : setDesktopRailOpen(false))}
+              className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--text-muted)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
+            >
+              {isMobile ? "Close" : "Collapse"}
+            </button>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2 text-[11px]">
+            <span className="rounded-full border border-[color:var(--border)] px-3 py-1 text-[color:var(--text-muted)]">
+              {messages.length} messages
+            </span>
+            <span className={`rounded-full border px-3 py-1 ${coverageConfidenceClass(activeCoverageConfidence)}`}>
+              Coverage: {activeCoverageConfidence}
+            </span>
+            <span className="rounded-full border border-[color:var(--border)] px-3 py-1 text-[color:var(--text-muted)]">
+              Checkout: {activeCheckoutReadiness}
+            </span>
+          </div>
+        </div>
+
+        {sending ? (
+          <div className="border-b border-[color:var(--border)] px-5 py-4">
+            <div className="rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3">
+              <div className="flex items-center gap-2 text-sm text-[color:var(--text-strong)]">
+                <LoaderCircle className="h-4 w-4 animate-spin text-[color:var(--accent)]" />
+                {THINKING_STAGES[thinkingStageIndex]}
+              </div>
+              <p className="mt-2 text-xs leading-6 text-[color:var(--text-muted)]">
+                Reasoning continues while the main analysis refreshes.
+              </p>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          <div className="space-y-3">
+            {messages.map((message, index) => {
+              const isUser = message.role === "user";
+              const meta =
+                !isUser && message.meta && typeof message.meta === "object"
+                  ? (message.meta as Record<string, unknown>)
+                  : null;
+              const topReasons = Array.isArray(meta?.topReasons)
+                ? meta?.topReasons.map((item) => String(item))
+                : [];
+              const missingEvidence = Array.isArray(meta?.missingEvidence)
+                ? meta?.missingEvidence.map((item) => String(item))
+                : [];
+              const messageActions = Array.isArray(meta?.nextActions)
+                ? (meta.nextActions as NextAction[])
+                : [];
+              return (
+                <div key={`${message.createdAt}-${message.clientId ?? index}`} className={`flex gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
+                  {!isUser ? (
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[color:var(--accent-soft)] text-[color:var(--accent)]">
+                      <Bot className="h-4 w-4" />
+                    </div>
+                  ) : null}
+                  <div className={`max-w-[88%] rounded-[1.5rem] px-4 py-3 text-sm leading-7 ${isUser ? "bg-[color:var(--text-strong)] text-[color:var(--background)]" : "border border-[color:var(--border)] bg-[color:var(--surface-strong)] text-[color:var(--text-soft)]"}`}>
+                    <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-[0.24em] opacity-70">
+                      {isUser ? <User className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
+                      {message.role}
+                      <span>{formatTimestamp(message.createdAt)}</span>
+                      {message.optimistic ? (
+                        <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[10px]">
+                          sending
+                        </span>
+                      ) : null}
+                    </div>
+                    <p>{meta?.summary ? String(meta.summary) : message.content}</p>
+                    {!isUser && messageActions.length ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {messageActions.slice(0, 3).map((action) => (
+                          <span
+                            key={action.id}
+                            className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium opacity-80 ${actionButtonClass(action.style)}`}
+                          >
+                            {action.label}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    {!isUser && meta ? (
+                      <details className="mt-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
+                        <summary className="cursor-pointer text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                          Reasoning details
+                        </summary>
+                        <div className="mt-2 space-y-2 text-xs leading-6">
+                          {typeof meta.verdict === "string" || typeof meta.trust === "number" ? (
+                            <p>
+                              Verdict: {String(meta.verdict || "pending")} | Trust:{" "}
+                              {typeof meta.trust === "number" ? meta.trust.toFixed(2) : "n/a"}
+                            </p>
+                          ) : null}
+                          {typeof meta.handledBy === "string" || typeof meta.replyKind === "string" ? (
+                            <p>
+                              Handled by: {String(meta.handledBy || "unknown")} | Reply kind:{" "}
+                              {String(meta.replyKind || "answer")}
+                            </p>
+                          ) : null}
+                          {typeof meta.conversationIntent === "string" || typeof meta.supportLevel === "string" ? (
+                            <p>
+                              Intent: {String(meta.conversationIntent || "unknown")} | Support:{" "}
+                              {String(meta.supportLevel || "unsupported")}
+                            </p>
+                          ) : null}
+                          {topReasons.length ? <p>Factors: {topReasons.join(" | ")}</p> : null}
+                          {missingEvidence.length ? <p>Missing: {missingEvidence.join(", ")}</p> : null}
+                          {meta.pendingAction && typeof meta.pendingAction === "object" ? (
+                            <p>Pending action: {String((meta.pendingAction as { type?: string }).type || "none")}</p>
+                          ) : null}
+                        </div>
+                      </details>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="border-t border-[color:var(--border)] px-5 py-4">
+          {activePendingAction ? (
+            <div className="mb-3 rounded-[1.3rem] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+              Awaiting confirmation: {activePendingAction.prompt}
+            </div>
+          ) : null}
+          {!activePendingAction && activeClarificationPending ? (
+            <div className="mb-3 rounded-[1.3rem] border border-sky-500/20 bg-sky-500/10 px-4 py-3 text-sm text-sky-700 dark:text-sky-300">
+              {activeClarificationPending.prompt}
+            </div>
+          ) : null}
+          {quickActions.length ? (
+            <div className="mb-3 flex flex-wrap gap-2">
+              {quickActions.slice(0, 4).map((action) => (
+                <button
+                  key={action.id}
+                  type="button"
+                  onClick={() => void sendChatMessage(action.message)}
+                  disabled={sending || !activeSessionId}
+                  className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${actionButtonClass(action.style)}`}
+                >
+                  {action.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <label className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">
+            {activeReplyKind === "confirmation_request"
+              ? "Confirm next action"
+              : activeClarificationPending
+                ? "Optional preference"
+                : needsFollowUp
+                  ? "Resume blocked run"
+                  : activeReplyKind === "discovery"
+                    ? "Add key requirements"
+                    : "Refine the brief"}
+          </label>
+          <textarea
+            value={chatInput}
+            onChange={(event) => setChatInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                void sendChatMessage();
+              }
+            }}
+            placeholder={
+              activeReplyKind === "confirmation_request"
+                ? "Example: yes, do it. Or: no, keep the current state."
+                : activeClarificationPending?.example
+                  ? `Example: ${activeClarificationPending.example}`
+                  : activeReplyKind === "discovery"
+                    ? "Example: budget under $200, under 55 inches wide, and delivery this week."
+                    : needsFollowUp
+                      ? "Example: prioritize verified sellers with free returns."
+                      : "Example: keep only options with 4.5+ stars and delivery this week."
+            }
+            className="mt-3 min-h-28 w-full rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm leading-7 text-[color:var(--text-strong)] outline-none transition placeholder:text-[color:var(--text-muted)] focus:border-[color:var(--accent)]"
+          />
+          <button type="button" onClick={() => void sendChatMessage()} disabled={!chatInput.trim() || sending || !activeSessionId} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-full bg-[color:var(--accent)] px-4 py-3 text-sm font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
+            {sending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            {activeReplyKind === "confirmation_request"
+              ? "Send confirmation"
+              : activeClarificationPending
+                ? "Add preference"
+                : needsFollowUp
+                  ? "Resume agent"
+                  : activeReplyKind === "discovery"
+                    ? "Send requirements"
+                    : "Send follow-up"}
+          </button>
+          {error ? (
+            <div className="mt-3 rounded-[1.4rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-300">
+              {error}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  async function sendChatMessage(presetMessage?: string) {
+    const outgoing = (presetMessage ?? chatInput).trim();
     if (!activeSessionId || !outgoing) {
       return;
     }
@@ -488,7 +797,11 @@ function ResultsContent() {
     };
 
     setOptimisticMessages((current) => [...current, optimistic]);
-    setChatInput("");
+    if (!presetMessage) {
+      setChatInput("");
+    } else {
+      setChatInput("");
+    }
     setSending(true);
     setError(null);
     try {
@@ -559,9 +872,23 @@ function ResultsContent() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-8 md:px-8 md:py-12">
-      <div className="grid gap-6">
-        <div className="mx-auto min-w-0 w-full max-w-5xl space-y-8">
+    <div className={`mx-auto flex w-full max-w-[110rem] flex-col gap-8 px-4 py-8 transition-[padding] duration-300 md:px-8 md:py-12 ${desktopRailOpen ? "xl:pr-[27rem]" : "xl:pr-24"}`}>
+      <div className="flex items-center justify-between gap-3 xl:hidden">
+        <div>
+          <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Session tools</p>
+          <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Live session rail</h2>
+        </div>
+        <button
+          type="button"
+          onClick={() => setMobileRailOpen(true)}
+          className="rounded-full border border-[color:var(--border)] px-4 py-2 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
+        >
+          Open chat
+        </button>
+      </div>
+
+      <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)] xl:items-start">
+        <div className="min-w-0 space-y-8">
           <section className="rounded-[2.5rem] border border-[color:var(--border-strong)] bg-[color:var(--surface)] p-7 shadow-[var(--shadow-strong)]">
             <div className="flex flex-wrap items-center gap-3">
               <span className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-2 text-xs uppercase tracking-[0.3em] text-[color:var(--text-muted)]">
@@ -585,19 +912,49 @@ function ResultsContent() {
                 tone={scoreTone(recommendation?.scientificScore.finalTrust ?? 0)}
               />
               <MetricCard
-                label="Source coverage"
-                value={`${recommendation?.evidenceStats.sourceCoverage ?? 0} sources`}
+                label="Commerce coverage"
+                value={`${commerceCoverage} sources`}
               />
               <MetricCard
                 label="Evidence freshness"
                 value={formatFreshness(recommendation?.evidenceStats.freshnessSeconds ?? 0)}
               />
             </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <span className={`rounded-full border px-3 py-1 text-xs ${coverageConfidenceClass(activeCoverageConfidence)}`}>
+                Coverage confidence: {activeCoverageConfidence}
+              </span>
+              <span className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--text-muted)]">
+                Checkout readiness: {activeCheckoutReadiness}
+              </span>
+              <button
+                type="button"
+                onClick={() => setDesktopRailOpen((current) => !current)}
+                className="hidden rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--text-muted)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)] xl:inline-flex"
+              >
+                {desktopRailOpen ? "Collapse live rail" : "Expand live rail"}
+              </button>
+            </div>
             <div className="mt-8 grid gap-4 lg:grid-cols-2">
               <div className="rounded-[1.8rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] p-5">
                 <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Agent response</p>
                 <p className="mt-4 text-sm leading-7 text-[color:var(--text-soft)]">{agentReplyText}</p>
-                {needsFollowUp ? (
+                {activeReplyKind === "confirmation_request" && activePendingAction ? (
+                  <div className="mt-4 rounded-[1.3rem] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+                    Awaiting confirmation: {activePendingAction.prompt}
+                  </div>
+                ) : null}
+                {activeReplyKind === "discovery" ? (
+                  <div className="mt-4 rounded-[1.3rem] border border-sky-500/20 bg-sky-500/10 px-4 py-3 text-sm text-sky-700 dark:text-sky-300">
+                    Discovery mode is active. Share the most important requirements and I will route the next step.
+                  </div>
+                ) : null}
+                {activeSupportLevel === "discovery_only" ? (
+                  <div className="mt-4 rounded-[1.3rem] border border-slate-500/20 bg-slate-500/10 px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
+                    This category is currently in discovery-only mode, so the assistant will refine the brief before any live evidence run.
+                  </div>
+                ) : null}
+                {needsFollowUp && activeReplyKind !== "confirmation_request" ? (
                   <div className="mt-4 rounded-[1.3rem] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
                     The orchestrator needs more detail before finalizing. Reply in the chat panel to continue the run.
                   </div>
@@ -642,7 +999,7 @@ function ResultsContent() {
                       {selectedProduct.title}
                     </h3>
                     <p className="mt-2 line-clamp-2 text-sm leading-6 text-[color:var(--text-soft)]">
-                      {selectedProduct.ingredientAnalysis.summary}
+                      {selectedProduct.productInsight.headline}
                     </p>
                     <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-[color:var(--text-soft)]">
                       <span className="text-lg font-semibold text-[color:var(--text-strong)]">
@@ -662,25 +1019,44 @@ function ResultsContent() {
                   </div>
                   <div className="grid gap-3">
                     <div className="rounded-[1.2rem] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3">
-                      <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">Ingredient score</p>
-                      <p className={`mt-2 text-2xl font-semibold ${scoreTone(selectedProduct.ingredientAnalysis.score)}`}>
-                        {selectedProduct.ingredientAnalysis.score}
+                      <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                        {selectedProduct.productInsight.analysisMode === "supplement" ? "Ingredient score" : "Analysis mode"}
+                      </p>
+                      <p className={`mt-2 text-2xl font-semibold ${selectedProduct.productInsight.analysisMode === "supplement" ? scoreTone(selectedProduct.ingredientAnalysis.score) : "text-[color:var(--text-strong)]"}`}>
+                        {selectedProduct.productInsight.analysisMode === "supplement"
+                          ? selectedProduct.ingredientAnalysis.score
+                          : selectedProduct.productInsight.analysisMode}
                       </p>
                     </div>
                     <ul className="space-y-2 text-xs leading-6 text-[color:var(--text-soft)]">
-                      {selectedProduct.ingredientAnalysis.beneficialSignals.slice(0, 2).map((signal, index) => (
-                        <li key={`${signal.ingredient}-${signal.note}`} className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
-                          +{ingredientDelta(index, "good")} {signal.ingredient}
-                        </li>
-                      ))}
-                      {selectedProduct.ingredientAnalysis.redFlags.slice(0, 1).map((signal, index) => (
-                        <li
-                          key={`${signal.ingredient}-${signal.note}`}
-                          className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-rose-700 dark:text-rose-300"
-                        >
-                          -{ingredientDelta(index, "risk")} risk: {signal.ingredient}
-                        </li>
-                      ))}
+                      {selectedProduct.productInsight.analysisMode === "supplement"
+                        ? selectedProduct.ingredientAnalysis.beneficialSignals.slice(0, 2).map((signal, index) => (
+                            <li key={`${signal.ingredient}-${signal.note}`} className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
+                              +{ingredientDelta(index, "good")} {signal.ingredient}
+                            </li>
+                          ))
+                        : selectedProduct.productInsight.strengths.slice(0, 2).map((item) => (
+                            <li key={item} className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
+                              {item}
+                            </li>
+                          ))}
+                      {selectedProduct.productInsight.analysisMode === "supplement"
+                        ? selectedProduct.ingredientAnalysis.redFlags.slice(0, 1).map((signal, index) => (
+                            <li
+                              key={`${signal.ingredient}-${signal.note}`}
+                              className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-rose-700 dark:text-rose-300"
+                            >
+                              -{ingredientDelta(index, "risk")} risk: {signal.ingredient}
+                            </li>
+                          ))
+                        : selectedProduct.productInsight.cautions.slice(0, 1).map((item) => (
+                            <li
+                              key={item}
+                              className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-rose-700 dark:text-rose-300"
+                            >
+                              {item}
+                            </li>
+                          ))}
                     </ul>
                     <Link
                       href={`/product/${selectedProduct.productId}?session=${activeSessionId}`}
@@ -698,7 +1074,7 @@ function ResultsContent() {
               )}
             </div>
 
-            <div className="mx-auto mt-8 w-full max-w-5xl">
+            <div className="mt-8 w-full">
               <div className="mb-4 flex items-center justify-between gap-3">
                 <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Immediate shortlist</p>
                 <span className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--text-muted)]">
@@ -784,112 +1160,42 @@ function ResultsContent() {
               )}
             </div>
           </section>
+        </div>
+      </div>
 
+      <div className="hidden xl:block">
+        {desktopRailOpen ? (
+          <aside className="fixed inset-y-0 right-0 z-40 hidden w-[26rem] border-l border-[color:var(--border)] bg-[color:var(--surface)]/98 shadow-[-16px_0_40px_rgba(0,0,0,0.08)] backdrop-blur-xl xl:block">
+            <div className="flex h-full min-h-0 flex-col pt-24">
+              {renderLiveSessionRail("desktop")}
+            </div>
+          </aside>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setDesktopRailOpen(true)}
+            className="fixed right-5 top-28 z-40 hidden rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-[color:var(--text-strong)] shadow-[var(--shadow-soft)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)] xl:inline-flex"
+          >
+            Open live rail
+          </button>
+        )}
+      </div>
 
-        <aside className="mx-auto flex w-full max-w-5xl flex-col rounded-[2.4rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">Live session</p>
-              <h2 className="mt-2 text-2xl font-semibold text-[color:var(--text-strong)]">Follow-up console</h2>
-            </div>
-            <div className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--text-muted)]">
-              {messages.length} messages
-            </div>
-          </div>
-          {sending ? (
-            <div className="mt-4 rounded-[1.4rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3">
-              <div className="flex items-center gap-2 text-sm text-[color:var(--text-strong)]">
-                <LoaderCircle className="h-4 w-4 animate-spin text-[color:var(--accent)]" />
-                {THINKING_STAGES[thinkingStageIndex]}
-              </div>
-              <p className="mt-2 text-xs leading-6 text-[color:var(--text-muted)]">
-                Structured reasoning updates while the agent run is in progress.
-              </p>
-            </div>
-          ) : null}
-          <div className="mt-6 flex flex-col gap-3">
-            {messages.map((message, index) => {
-              const isUser = message.role === "user";
-              const meta =
-                !isUser && message.meta && typeof message.meta === "object"
-                  ? (message.meta as Record<string, unknown>)
-                  : null;
-              const topReasons = Array.isArray(meta?.topReasons)
-                ? meta?.topReasons.map((item) => String(item))
-                : [];
-              const missingEvidence = Array.isArray(meta?.missingEvidence)
-                ? meta?.missingEvidence.map((item) => String(item))
-                : [];
-              return (
-                <div key={`${message.createdAt}-${message.clientId ?? index}`} className={`flex gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
-                  {!isUser ? (
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[color:var(--accent-soft)] text-[color:var(--accent)]">
-                      <Bot className="h-4 w-4" />
-                    </div>
-                  ) : null}
-                  <div className={`max-w-[84%] rounded-[1.5rem] px-4 py-3 text-sm leading-7 ${isUser ? "bg-[color:var(--text-strong)] text-[color:var(--background)]" : "border border-[color:var(--border)] bg-[color:var(--surface-strong)] text-[color:var(--text-soft)]"}`}>
-                    <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-[0.24em] opacity-70">
-                      {isUser ? <User className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
-                      {message.role}
-                      <span>{formatTimestamp(message.createdAt)}</span>
-                      {message.optimistic ? (
-                        <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[10px]">
-                          sending
-                        </span>
-                      ) : null}
-                    </div>
-                    <p>{meta?.summary ? String(meta.summary) : message.content}</p>
-                    {!isUser && meta ? (
-                      <details className="mt-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
-                        <summary className="cursor-pointer text-xs uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
-                          Reasoning details
-                        </summary>
-                        <div className="mt-2 space-y-2 text-xs leading-6">
-                          {typeof meta.verdict === "string" || typeof meta.trust === "number" ? (
-                            <p>
-                              Verdict: {String(meta.verdict || "pending")} | Trust:{" "}
-                              {typeof meta.trust === "number" ? meta.trust.toFixed(2) : "n/a"}
-                            </p>
-                          ) : null}
-                          {topReasons.length ? <p>Factors: {topReasons.join(" | ")}</p> : null}
-                          {missingEvidence.length ? <p>Missing: {missingEvidence.join(", ")}</p> : null}
-                        </div>
-                      </details>
-                    ) : null}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          <div className="mt-6 space-y-3">
-            <label className="text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">
-              {needsFollowUp ? "Resume blocked run" : "Refine the brief"}
-            </label>
-            <textarea
-              value={chatInput}
-              onChange={(event) => setChatInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  void sendChatMessage();
-                }
-              }}
-              placeholder={needsFollowUp ? "Example: prioritize verified sellers with free returns." : "Example: keep only options with 4.5+ stars and delivery this week."}
-              className="min-h-28 w-full rounded-[1.6rem] border border-[color:var(--border)] bg-[color:var(--surface-strong)] px-4 py-3 text-sm leading-7 text-[color:var(--text-strong)] outline-none transition placeholder:text-[color:var(--text-muted)] focus:border-[color:var(--accent)]"
-            />
-            <button type="button" onClick={() => void sendChatMessage()} disabled={!chatInput.trim() || sending || !activeSessionId} className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[color:var(--accent)] px-4 py-3 text-sm font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
-              {sending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              {needsFollowUp ? "Resume agent" : "Send follow-up"}
-            </button>
-            {error ? (
-              <div className="rounded-[1.4rem] border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-300">
-                {error}
-              </div>
-            ) : null}
-          </div>
-        </aside>
+      {mobileRailOpen ? (
+        <div className="fixed inset-0 z-50 xl:hidden">
+          <button
+            type="button"
+            onClick={() => setMobileRailOpen(false)}
+            className="absolute inset-0 bg-black/30"
+            aria-label="Close live session rail"
+          />
+          <aside className="absolute inset-y-0 right-0 flex w-full max-w-[28rem] flex-col border-l border-[color:var(--border)] bg-[color:var(--surface)] shadow-[-12px_0_32px_rgba(0,0,0,0.18)]">
+            <div className="pt-6">{renderLiveSessionRail("mobile")}</div>
+          </aside>
+        </div>
+      ) : null}
 
-          <details className="group rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
+      <details className="group rounded-[2rem] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-[var(--shadow-soft)]">
             <summary className="cursor-pointer list-none">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -978,6 +1284,8 @@ function ResultsContent() {
                   <div className="grid gap-3 md:grid-cols-2">
                     <MetricCard label="Cache status" value={collectionInsights.cacheStatus} />
                     <MetricCard label="Catalog status" value={recommendation?.coverageAudit?.catalogStatus ?? "unknown"} />
+                    <MetricCard label="Commerce coverage" value={commerceCoverage} />
+                    <MetricCard label="Total sources" value={totalSourceCoverage} />
                     <MetricCard label="Evidence quality" value={reviewInsights.evidenceQualityScore} tone={scoreTone(reviewInsights.evidenceQualityScore)} />
                     <MetricCard label="Review confidence" value={reviewInsights.confidence} tone={scoreTone(reviewInsights.confidence)} />
                     <MetricCard label="Duplicate clusters" value={reviewInsights.duplicateReviewClusters} />
@@ -1055,15 +1363,12 @@ function ResultsContent() {
                 </Panel>
               </div>
             </div>
-          </details>
+      </details>
 
-          <Link href="/history" className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-4 py-3 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]">
-            <CheckCircle2 className="h-4 w-4" />
-            Open session history
-          </Link>
-        </div>
-
-      </div>
+      <Link href="/history" className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-4 py-3 text-sm text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]">
+        <CheckCircle2 className="h-4 w-4" />
+        Open session history
+      </Link>
     </div>
   );
 }

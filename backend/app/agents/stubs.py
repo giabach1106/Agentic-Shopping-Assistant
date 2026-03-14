@@ -13,6 +13,13 @@ from app.core.model_router import ModelRouter
 from app.memory.evidence_store import SQLiteEvidenceStore
 from app.models.agent_outputs import PriceLogisticsOutput, VisualInsight
 from app.models.planner import SearchConstraints
+from app.orchestrator.domain_support import (
+    canonicalize_category,
+    constraint_match_score,
+    infer_domain,
+    title_matches_constraints,
+)
+from app.orchestrator.search_brief import SearchBrief
 from app.rag.base import RetrievalDocument
 from app.rag.providers import HybridRAGService
 from app.services.review_analysis import ReviewEvidenceAnalyzer
@@ -51,7 +58,6 @@ _OFF_TOPIC_PRODUCT_HINTS = (
     "wedding",
     "iphone",
     "laptop",
-    "chair",
 )
 _COMMERCE_SOURCES = {"amazon", "walmart", "ebay", "nutritionfaktory", "dps"}
 
@@ -205,29 +211,42 @@ def _is_candidate_title_relevant(title: str, constraints: dict[str, Any]) -> boo
         return False
     if any(hint in lower for hint in _OFF_TOPIC_PRODUCT_HINTS):
         return False
-    if not any(keyword in lower for keyword in _SUPPLEMENT_TITLE_KEYWORDS):
-        return False
-    focus_terms = _constraint_focus_terms(constraints)
-    if focus_terms and not any(term in lower for term in focus_terms):
-        return False
-
-    excludes = constraints.get("exclude") or []
-    if isinstance(excludes, list):
-        for value in excludes:
-            text = str(value).strip().lower()
-            if text and text in lower:
-                return False
-    return True
+    return title_matches_constraints(title, constraints)
 
 
 def _constraint_match_score(title: str, constraints: dict[str, Any]) -> int:
-    lower = title.lower()
-    score = 2 if any(keyword in lower for keyword in _SUPPLEMENT_TITLE_KEYWORDS) else 0
-    focus_terms = _constraint_focus_terms(constraints)
-    for term in focus_terms:
-        if term in lower:
-            score += 1
-    return score
+    return constraint_match_score(title, constraints)
+
+
+def _normalize_delivery_preference(value: str | None) -> str:
+    normalized = str(value or "").strip().lower()
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized
+
+
+def _delivery_rank_penalty(
+    shipping_eta: str,
+    delivery_deadline: str | None,
+) -> int:
+    preference = _normalize_delivery_preference(delivery_deadline)
+    if not preference:
+        return 0
+    shipping = str(shipping_eta or "").strip().lower()
+    if not shipping or shipping == "unknown":
+        return 2
+    if preference in {"fast delivery", "today", "tomorrow"}:
+        if any(token in shipping for token in ("same day", "same-day", "next day", "overnight", "1 day", "2 day", "2-day")):
+            return 0
+        if any(token in shipping for token in ("2-4 days", "3-4 days", "3-5 days")):
+            return 1
+        return 2
+    if preference in {"this week", "this friday", "next friday"} or preference.startswith("this ") or preference.startswith("next "):
+        if any(token in shipping for token in ("1-2 days", "2-4 days", "3-4 days", "3-5 days", "4-6 days", "this week")):
+            return 0
+        if any(token in shipping for token in ("5-7 days", "6-8 days")):
+            return 1
+        return 2
+    return 0 if preference in shipping else 1
 
 
 def _sanitize_collection_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -295,6 +314,8 @@ def _sanitize_collection_payload(payload: dict[str, Any]) -> dict[str, Any]:
             if str(item).strip()
         }
     )
+    source_health = dict(payload.get("sourceHealth") or {})
+    crawl_meta = dict(payload.get("crawlMeta") or {})
 
     sanitized["products"] = products
     sanitized["reviews"] = reviews
@@ -302,13 +323,37 @@ def _sanitize_collection_payload(payload: dict[str, Any]) -> dict[str, Any]:
     sanitized["trace"] = trace
     sanitized["missingEvidence"] = missing
     sanitized["blockedSources"] = blocked
-    if not any([products, reviews, visuals, trace, missing, blocked]):
+    if source_health:
+        sanitized["sourceHealth"] = source_health
+    if crawl_meta:
+        sanitized["crawlMeta"] = crawl_meta
+    if not any([products, reviews, visuals, trace, missing, blocked, source_health, crawl_meta]):
         return {}
     return sanitized
 
 
+def _strip_run_local_collection(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    stripped = dict(payload)
+    stripped["trace"] = []
+    stripped.pop("sourceHealth", None)
+    stripped.pop("crawlMeta", None)
+    return stripped
+
+
+def _cache_trace_event(has_cache: bool) -> dict[str, Any]:
+    return {
+        "source": "cache",
+        "step": "cache_lookup",
+        "status": "ok" if has_cache else "warning",
+        "detail": "Loaded stored evidence for this constraint set." if has_cache else "No cached evidence found.",
+        "duration_ms": 0,
+    }
+
+
 class PlannerAgent:
-    _critical_fields = ("category", "budgetMax", "minRating", "deliveryDeadline")
+    _critical_fields = ("category",)
 
     def __init__(self, model_router: ModelRouter) -> None:
         self._model_router = model_router
@@ -319,6 +364,7 @@ class PlannerAgent:
         history: list[dict[str, Any]],
         existing_constraints: dict[str, Any] | None = None,
         follow_up_count: int = 0,
+        clarification_asked_count: int = 0,
         session_id: str | None = None,
     ) -> dict[str, Any]:
         del history
@@ -345,6 +391,8 @@ class PlannerAgent:
         merged = self._merge_constraints(existing_constraints or {}, extracted)
         constraints = SearchConstraints.model_validate(merged)
         constraints_dict = constraints.to_public_dict()
+        search_brief = SearchBrief.from_constraints(constraints_dict)
+        search_ready = bool(constraints_dict.get("category"))
 
         missing_fields = [
             field
@@ -361,12 +409,26 @@ class PlannerAgent:
         ]
 
         follow_up_question = None
+        clarification_pending = None
+        clarification_actions: list[dict[str, Any]] = []
+        next_clarification_count = clarification_asked_count
+        existing_category = canonicalize_category(str((existing_constraints or {}).get("category") or "").strip())
+        if search_ready and search_brief.category != existing_category:
+            next_clarification_count = 0
         if needs_follow_up:
             missing_field = missing_fields[0]
             follow_up_question = self._build_follow_up_question(missing_field)
             next_follow_up_count = follow_up_count + 1
         elif len(missing_fields) == 0:
             next_follow_up_count = 0
+            if next_clarification_count < 1:
+                clarification_pending = search_brief.optional_clarification(constraints_dict)
+                if clarification_pending:
+                    next_clarification_count += 1
+                    clarification_actions = self._clarification_actions(
+                        field=str(clarification_pending.get("field") or ""),
+                        domain=search_brief.domain,
+                    )
         else:
             next_follow_up_count = follow_up_count
 
@@ -377,6 +439,11 @@ class PlannerAgent:
             "needsFollowUp": needs_follow_up,
             "followUpQuestion": follow_up_question,
             "followUpCount": next_follow_up_count,
+            "clarificationPending": clarification_pending,
+            "clarificationAskedCount": next_clarification_count,
+            "clarificationActions": clarification_actions,
+            "searchReady": search_ready,
+            "searchBrief": search_brief.to_public_dict(),
             "modelMeta": {
                 "modelId": llm_result.model_id,
                 "fallbackUsed": llm_result.fallback_used,
@@ -419,9 +486,6 @@ class PlannerAgent:
     def _build_follow_up_question(self, missing_field: str) -> str:
         question_map = {
             "category": "What product category do you want me to search?",
-            "budgetMax": "What is your maximum budget?",
-            "minRating": "What minimum rating should I enforce (for example, 4 stars)?",
-            "deliveryDeadline": "By what date or day do you need the item delivered?",
         }
         return question_map.get(
             missing_field,
@@ -458,7 +522,7 @@ class PlannerAgent:
         lower = message.lower()
         category = None
         intent_match = re.search(
-            r"(?:need|want|looking for|find|buy|get)\s+(?:an?\s+|some\s+)?"
+            r"(?:need|want|looking for|find|buy|get)\s+(?:me\s+)?(?:an?\s+|some\s+)?"
             r"([a-z0-9][a-z0-9\-\s]{2,80}?)"
             r"(?=\s+(?:under|below|with|delivered|by|exclude|for|and)\b|[,.]|$)",
             lower,
@@ -467,6 +531,19 @@ class PlannerAgent:
             candidate = intent_match.group(1).strip()
             candidate = re.sub(r"\s+", " ", candidate)
             candidate = re.sub(r"^(?:a|an|the)\s+", "", candidate)
+            if candidate in {
+                "clean ingredients",
+                "fast delivery",
+                "delivery this week",
+                "delivery window",
+                "lumbar support",
+                "adjustable armrests",
+                "adjustable arms",
+                "low lactose",
+                "third party tested",
+                "third-party tested",
+            } or candidate.startswith("delivery "):
+                candidate = ""
             if candidate in _GENERIC_CATEGORY_PHRASES:
                 candidate = ""
             if 2 <= len(candidate) <= 80:
@@ -533,28 +610,45 @@ class PlannerAgent:
         delivery_deadline = deadline_match.group(1).strip() if deadline_match else None
         if delivery_deadline is None:
             by_day_match = re.search(
-                r"(?:by|before)\s+(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+                r"(?:by|before)\s+((?:this|next)\s+)?(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
                 lower,
             )
             if by_day_match:
-                delivery_deadline = by_day_match.group(1).strip()
+                delivery_deadline = " ".join(
+                    part.strip()
+                    for part in (by_day_match.group(1) or "", by_day_match.group(2) or "")
+                    if part and part.strip()
+                )
         if delivery_deadline is None:
             in_days_match = re.search(r"(?:in|within)\s+(\d{1,2})\s+days?", lower)
             if in_days_match:
                 delivery_deadline = f"in {int(in_days_match.group(1))} days"
         if delivery_deadline is None:
             direct_deadline_match = re.fullmatch(
-                r"(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+                r"((?:this|next)\s+)?(today|tomorrow|this week|fast delivery|monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
                 lower.strip(),
             )
             if direct_deadline_match:
-                delivery_deadline = direct_deadline_match.group(1)
+                delivery_deadline = " ".join(
+                    part.strip()
+                    for part in (direct_deadline_match.group(1) or "", direct_deadline_match.group(2) or "")
+                    if part and part.strip()
+                )
+        if delivery_deadline is None:
+            if "this week" in lower:
+                delivery_deadline = "this week"
+            elif "fast delivery" in lower or "fast shipping" in lower:
+                delivery_deadline = "fast delivery"
 
         must_have: list[str] = []
         if "ergonomic" in lower:
             must_have.append("ergonomic")
         if "dorm" in lower:
             must_have.append("dorm-friendly size")
+        if "clean ingredients" in lower and "clean ingredients" not in must_have:
+            must_have.append("clean ingredients")
+        if "fast delivery" in lower and "fast delivery" not in must_have:
+            must_have.append("fast delivery")
         supplement_signals = [
             ("third-party tested", "third-party tested"),
             ("third party tested", "third-party tested"),
@@ -625,6 +719,46 @@ class PlannerAgent:
             "visualEvidence": visual_evidence,
         }
 
+    def _clarification_actions(self, *, field: str, domain: str) -> list[dict[str, Any]]:
+        if field == "budgetMax":
+            if domain == "chair":
+                return [
+                    {"id": "clarify_budget_150", "label": "Budget under $150", "message": "Budget under $150.", "kind": "reply", "style": "primary", "requiresConfirmation": False},
+                    {"id": "clarify_budget_200", "label": "Budget under $200", "message": "Budget under $200.", "kind": "reply", "style": "secondary", "requiresConfirmation": False},
+                ]
+            if domain == "desk":
+                return [
+                    {"id": "clarify_budget_200", "label": "Budget under $200", "message": "Budget under $200.", "kind": "reply", "style": "primary", "requiresConfirmation": False},
+                    {"id": "clarify_budget_300", "label": "Budget under $300", "message": "Budget under $300.", "kind": "reply", "style": "secondary", "requiresConfirmation": False},
+                ]
+            return [
+                {"id": "clarify_budget_80", "label": "Budget under $80", "message": "Budget under $80.", "kind": "reply", "style": "primary", "requiresConfirmation": False},
+                {"id": "clarify_budget_120", "label": "Budget under $120", "message": "Budget under $120.", "kind": "reply", "style": "secondary", "requiresConfirmation": False},
+            ]
+        if field == "minRating":
+            return [
+                {"id": "clarify_rating_4", "label": "Need 4+ stars", "message": "Minimum rating 4 stars.", "kind": "reply", "style": "secondary", "requiresConfirmation": False},
+                {"id": "clarify_rating_45", "label": "Need 4.5+ stars", "message": "Minimum rating 4.5 stars.", "kind": "reply", "style": "subtle", "requiresConfirmation": False},
+            ]
+        if field == "deliveryDeadline":
+            return [
+                {"id": "clarify_delivery_week", "label": "Need it this week", "message": "Need delivery this week.", "kind": "reply", "style": "secondary", "requiresConfirmation": False},
+                {"id": "clarify_delivery_fast", "label": "Need fast delivery", "message": "Need fast delivery.", "kind": "reply", "style": "subtle", "requiresConfirmation": False},
+            ]
+        if field == "mustHave" and domain == "chair":
+            return [
+                {"id": "clarify_chair_lumbar", "label": "Need lumbar support", "message": "Must have lumbar support.", "kind": "reply", "style": "secondary", "requiresConfirmation": False},
+            ]
+        if field == "mustHave" and domain == "desk":
+            return [
+                {"id": "clarify_desk_size", "label": "Need under 55 inches", "message": "Need a desk under 55 inches wide.", "kind": "reply", "style": "secondary", "requiresConfirmation": False},
+            ]
+        if field == "mustHave":
+            return [
+                {"id": "clarify_clean_ingredients", "label": "Need clean ingredients", "message": "Need clean ingredients.", "kind": "reply", "style": "secondary", "requiresConfirmation": False},
+            ]
+        return []
+
 
 class CoverageAuditorAgent:
     def __init__(
@@ -638,7 +772,9 @@ class CoverageAuditorAgent:
     async def run(self, constraints: dict[str, Any]) -> dict[str, Any]:
         cached = await self._evidence_store.get_cached_collection(constraints)
         raw_cached_collection = dict(cached.get("collection") or {}) if cached else {}
-        cached_collection = _sanitize_collection_payload(raw_cached_collection)
+        cached_collection = _strip_run_local_collection(
+            _sanitize_collection_payload(raw_cached_collection)
+        )
         cache_status = "hit" if cached_collection else "miss"
         if cached and cached_collection != raw_cached_collection:
             await self._evidence_store.upsert_cached_collection(
@@ -647,11 +783,8 @@ class CoverageAuditorAgent:
                 self._build_stats(cached_collection),
             )
 
-        query_parts = [str(constraints.get("category") or "").strip()]
-        query_parts.extend(
-            str(item).strip() for item in (constraints.get("mustHave") or [])[:3]
-        )
-        query = " ".join(part for part in query_parts if part).strip()
+        search_brief = SearchBrief.from_constraints(constraints)
+        query = search_brief.query_for("amazon")
         catalog_records = await self._evidence_store.list_catalog_records(
             query=query or None,
             limit=180,
@@ -662,6 +795,17 @@ class CoverageAuditorAgent:
         collection = _sanitize_collection_payload(
             self._merge_collections(cached_collection, catalog_collection)
         )
+        collection["trace"] = [
+            _cache_trace_event(bool(cached_collection)),
+            *[
+                item
+                for item in collection.get("trace", [])
+                if isinstance(item, dict)
+            ],
+        ]
+        collection["crawlMeta"] = {
+            "searchBrief": search_brief.to_public_dict(),
+        }
         stats = self._build_stats(collection)
         sufficiency = self._evaluate_sufficiency(stats)
         source_coverage = self._compute_source_coverage(collection)
@@ -995,10 +1139,13 @@ class EvidenceCollectionAgent:
         *,
         seed_collection: dict[str, Any] | None = None,
         coverage_audit: dict[str, Any] | None = None,
+        force_collect: bool = False,
     ) -> dict[str, Any]:
         cached = await self._evidence_store.get_cached_collection(constraints)
         raw_cached_collection = dict(cached.get("collection") or {}) if cached else {}
-        cached_collection = _sanitize_collection_payload(raw_cached_collection)
+        cached_collection = _strip_run_local_collection(
+            _sanitize_collection_payload(raw_cached_collection)
+        )
         cached_stats = dict(cached.get("stats") or {}) if cached else {}
         if cached and cached_collection != raw_cached_collection:
             await self._evidence_store.upsert_cached_collection(
@@ -1007,10 +1154,16 @@ class EvidenceCollectionAgent:
                 self._build_stats(cached_collection),
             )
 
-        collection = _sanitize_collection_payload(self._merge_collections(
-            _sanitize_collection_payload(dict(seed_collection or {})),
-            dict(cached_collection or {}),
-        ))
+        search_brief = SearchBrief.from_constraints(constraints)
+        collection = _sanitize_collection_payload(
+            self._merge_collections(
+                _sanitize_collection_payload(dict(seed_collection or {})),
+                dict(cached_collection or {}),
+            )
+        )
+        crawl_meta = dict(collection.get("crawlMeta") or {})
+        crawl_meta["searchBrief"] = search_brief.to_public_dict()
+        collection["crawlMeta"] = crawl_meta
         stats = self._build_stats(collection) if collection else dict(cached_stats)
         sufficiency = dict((coverage_audit or {}).get("sufficiency") or {})
         if not sufficiency:
@@ -1020,14 +1173,21 @@ class EvidenceCollectionAgent:
         catalog_status = str((coverage_audit or {}).get("catalogStatus") or "unknown")
         crawl_performed = False
 
-        if not sufficiency["isSufficient"]:
+        if force_collect or not sufficiency["isSufficient"]:
             result = await self._collector.collect(constraints)
             fresh_payload = _sanitize_collection_payload(result.to_public_dict())
             collection = _sanitize_collection_payload(self._merge_collections(collection, fresh_payload))
+            crawl_meta = dict(collection.get("crawlMeta") or {})
+            crawl_meta["searchBrief"] = search_brief.to_public_dict()
+            collection["crawlMeta"] = crawl_meta
             stats = self._build_stats(collection)
             sufficiency = self._evaluate_sufficiency(stats)
-            await self._evidence_store.upsert_cached_collection(constraints, collection, stats)
-            cache_status = "merged" if cached_collection else "miss"
+            await self._evidence_store.upsert_cached_collection(
+                constraints,
+                _strip_run_local_collection(collection),
+                stats,
+            )
+            cache_status = "forced_refresh" if force_collect else ("merged" if cached_collection else "miss")
             crawl_performed = True
 
         source_coverage = self._compute_source_coverage(collection)
@@ -1051,6 +1211,8 @@ class EvidenceCollectionAgent:
             "missingEvidence": missing_evidence,
             "blockedSources": collection.get("blockedSources", []),
             "blockedCommerceSources": blocked_commerce_sources,
+            "sourceHealth": dict(collection.get("sourceHealth") or {}),
+            "crawlMeta": dict(collection.get("crawlMeta") or {}),
             "collection": collection,
             "cacheStatus": cache_status,
             "catalogStatus": catalog_status,
@@ -1140,17 +1302,6 @@ class EvidenceCollectionAgent:
             merged_trace.extend(item for item in cached["trace"] if isinstance(item, dict))
         if isinstance(fresh.get("trace"), list):
             merged_trace.extend(item for item in fresh["trace"] if isinstance(item, dict))
-        merged_trace.insert(
-            0,
-            {
-                "source": "cache",
-                "step": "cache_lookup",
-                "status": "ok" if cached else "warning",
-                "detail": "Merged stored evidence with collector output." if cached else "No cached evidence found.",
-                "duration_ms": 0,
-            },
-        )
-
         merged["trace"] = merged_trace
         merged["missingEvidence"] = sorted(
             {
@@ -1166,6 +1317,14 @@ class EvidenceCollectionAgent:
                 if str(item).strip()
             }
         )
+        source_health = dict(cached.get("sourceHealth") or {})
+        source_health.update(dict(fresh.get("sourceHealth") or {}))
+        if source_health:
+            merged["sourceHealth"] = source_health
+        crawl_meta = dict(cached.get("crawlMeta") or {})
+        crawl_meta.update(dict(fresh.get("crawlMeta") or {}))
+        if crawl_meta:
+            merged["crawlMeta"] = crawl_meta
         return merged
 
     def _merge_entry_list(
@@ -1402,22 +1561,39 @@ class ReviewIntelligenceAgent:
         if len(evidence_refs) < 2:
             risk_flags.append("Low evidence coverage across sources.")
 
-        aspects = {
-            "digestibility": 0.0,
-            "mixability": 0.0,
-            "taste": 0.0,
-            "ingredientQuality": 0.0,
-            "priceValue": 0.0,
-            "delivery": 0.0,
-        }
-        keywords = {
-            "digestibility": ("digest", "bloat", "stomach", "lactose", "tolerate"),
-            "mixability": ("mix", "clump", "texture", "shaker", "foam"),
-            "taste": ("taste", "flavor", "sweet", "aftertaste"),
-            "ingredientQuality": ("ingredient", "third-party", "tested", "clean label", "sucralose", "additive"),
-            "priceValue": ("price", "value", "expensive", "cheap", "cost"),
-            "delivery": ("ship", "delivery", "arrive", "late"),
-        }
+        domain = infer_domain(str(constraints.get("category") or ""))
+        if domain in {"chair", "desk"}:
+            aspects = {
+                "comfort": 0.0,
+                "assembly": 0.0,
+                "durability": 0.0,
+                "price": 0.0,
+                "delivery": 0.0,
+            }
+            keywords = {
+                "comfort": ("comfort", "ergonomic", "lumbar", "support", "posture", "stable"),
+                "assembly": ("assembly", "assemble", "instructions", "screws", "setup"),
+                "durability": ("durable", "sturdy", "wobble", "solid", "material", "frame"),
+                "price": ("price", "value", "expensive", "cheap", "cost"),
+                "delivery": ("ship", "delivery", "arrive", "late"),
+            }
+        else:
+            aspects = {
+                "digestibility": 0.0,
+                "mixability": 0.0,
+                "taste": 0.0,
+                "ingredientQuality": 0.0,
+                "priceValue": 0.0,
+                "delivery": 0.0,
+            }
+            keywords = {
+                "digestibility": ("digest", "bloat", "stomach", "lactose", "tolerate"),
+                "mixability": ("mix", "clump", "texture", "shaker", "foam"),
+                "taste": ("taste", "flavor", "sweet", "aftertaste"),
+                "ingredientQuality": ("ingredient", "third-party", "tested", "clean label", "sucralose", "additive"),
+                "priceValue": ("price", "value", "expensive", "cheap", "cost"),
+                "delivery": ("ship", "delivery", "arrive", "late"),
+            }
         for aspect, tokens in keywords.items():
             hits = [doc for doc in docs if any(token in doc.content.lower() for token in tokens)]
             if not hits:
@@ -1548,9 +1724,9 @@ class PriceLogisticsAgent:
             ("soft_15", 1.15),
         ]
         tier_priority = {name: index for index, (name, _) in enumerate(tier_rules)}
-        ranked_candidates: list[tuple[tuple[int, int, float, float, int], dict[str, Any]]] = []
+        ranked_candidates: list[tuple[tuple[int, int, int, float, float, int], dict[str, Any]]] = []
         candidates: list[dict[str, Any]] = []
-        best_candidate_by_key: dict[str, tuple[tuple[int, int, float, float, int], dict[str, Any]]] = {}
+        best_candidate_by_key: dict[str, tuple[tuple[int, int, int, float, float, int], dict[str, Any]]] = {}
         budget_max = constraints.get("budgetMax")
         try:
             budget_limit = float(budget_max) if budget_max is not None else None
@@ -1598,12 +1774,18 @@ class PriceLogisticsAgent:
                     if matched_tier is None:
                         continue
                     constraint_tier = matched_tier
+                shipping_eta = str(item.get("shipping_eta") or "unknown")
+                delivery_penalty = _delivery_rank_penalty(
+                    shipping_eta=shipping_eta,
+                    delivery_deadline=str(constraints.get("deliveryDeadline") or ""),
+                )
                 normalized_url = _normalize_url_for_key(url)
                 canonical_key = _canonical_product_key(title, normalized_url)
                 rating_for_sort = rating if rating > 0 else 0.0
                 rank_key = (
                     tier_priority.get(constraint_tier, 99),
                     -match_score,
+                    delivery_penalty,
                     -rating_for_sort,
                     price,
                     source_priority.get(source, 99),
@@ -1613,7 +1795,7 @@ class PriceLogisticsAgent:
                     "sourceUrl": normalized_url or url,
                     "price": price,
                     "rating": rating if rating > 0 else None,
-                    "shippingETA": str(item.get("shipping_eta") or "unknown"),
+                    "shippingETA": shipping_eta,
                     "returnPolicy": str(item.get("return_policy") or "unknown"),
                     "checkoutReady": False,
                     "evidenceRefs": [str(item.get("evidence_id") or "").strip()],
@@ -1667,8 +1849,11 @@ class PriceLogisticsAgent:
             candidates = list(deduped_fallback.values())[:10]
 
         blockers = list(execution_result.blockers)
-        if self._runtime_mode == "prod" and self._ui_executor_backend == "mock":
-            blockers.append("executor_not_realtime")
+        checkout_readiness = (
+            "live"
+            if self._ui_executor_backend != "mock"
+            else "mock"
+        )
         if self._runtime_mode == "prod" and len(candidates) == 0:
             blockers.append("missing_realtime_products")
 
@@ -1717,6 +1902,8 @@ class PriceLogisticsAgent:
 
         response = validated_output.model_dump(by_alias=True)
         response["status"] = "NEED_DATA" if blockers else "OK"
+        response["checkoutReadiness"] = checkout_readiness
+        response["candidateCount"] = len(candidates)
         response["modelMeta"] = {
             "modelId": llm_result.model_id,
             "fallbackUsed": llm_result.fallback_used,

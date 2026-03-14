@@ -155,3 +155,75 @@ def test_planner_deadline_token_does_not_override_existing_category() -> None:
         assert result["constraints"]["deliveryDeadline"] == "friday"
 
     asyncio.run(run_test())
+
+
+def test_planner_normalizes_find_me_whey_isolate_and_sets_optional_clarification() -> None:
+    async def run_test() -> None:
+        router = ModelRouter(_settings())
+        planner = PlannerAgent(router)
+        result = await planner.run(
+            message="find me whey isolate",
+            history=[],
+            existing_constraints={},
+            follow_up_count=0,
+            clarification_asked_count=0,
+        )
+        assert result["constraints"]["category"] == "whey isolate"
+        assert result["needsFollowUp"] is False
+        assert result["clarificationPending"]["field"] == "budgetMax"
+        assert result["searchReady"] is True
+
+    asyncio.run(run_test())
+
+
+def test_planner_updates_this_friday_without_overwriting_category() -> None:
+    async def run_test() -> None:
+        router = ModelRouter(_settings())
+        planner = PlannerAgent(router)
+        existing = {
+            "category": "whey isolate",
+            "budgetMax": 80,
+            "minRating": None,
+            "deliveryDeadline": None,
+            "mustHave": ["whey isolate"],
+            "niceToHave": [],
+            "exclude": [],
+        }
+        result = await planner.run(
+            message="by this friday",
+            history=[],
+            existing_constraints=existing,
+            follow_up_count=0,
+            clarification_asked_count=1,
+        )
+        assert result["constraints"]["category"] == "whey isolate"
+        assert result["constraints"]["deliveryDeadline"] == "this friday"
+        assert result["needsFollowUp"] is False
+
+    asyncio.run(run_test())
+
+
+def test_planner_treats_clean_ingredients_as_preference_not_category() -> None:
+    async def run_test() -> None:
+        router = ModelRouter(_settings())
+        planner = PlannerAgent(router)
+        existing = {
+            "category": "whey isolate",
+            "budgetMax": None,
+            "minRating": None,
+            "deliveryDeadline": None,
+            "mustHave": ["whey isolate"],
+            "niceToHave": [],
+            "exclude": [],
+        }
+        result = await planner.run(
+            message="need clean ingredients",
+            history=[],
+            existing_constraints=existing,
+            follow_up_count=0,
+            clarification_asked_count=1,
+        )
+        assert result["constraints"]["category"] == "whey isolate"
+        assert "clean ingredients" in result["constraints"]["mustHave"]
+
+    asyncio.run(run_test())
