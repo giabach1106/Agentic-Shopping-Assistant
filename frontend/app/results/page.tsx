@@ -534,15 +534,15 @@ function ResultsContent() {
     recommendation?.decisionSummary ||
     latestAssistantMeta?.decisionSummary ||
     agentReplyText;
-  const compactQuickActions = useMemo(
-    () =>
-      activePendingAction
-        ? quickActions.slice(0, 2)
-        : showComposerSuggestions
-          ? quickActions.slice(0, 6)
-          : quickActions.slice(0, 2),
-    [activePendingAction, quickActions, showComposerSuggestions]
-  );
+  const compactQuickActions = useMemo(() => {
+    if (activePendingAction) {
+      return quickActions.slice(0, 2);
+    }
+    if (activeClarificationPending) {
+      return showComposerSuggestions ? quickActions.slice(0, 6) : [];
+    }
+    return showComposerSuggestions ? quickActions.slice(0, 6) : quickActions.slice(0, 2);
+  }, [activeClarificationPending, activePendingAction, quickActions, showComposerSuggestions]);
 
   useEffect(() => {
     setShowComposerSuggestions(activeReplyKind === "confirmation_request");
@@ -753,7 +753,7 @@ function ResultsContent() {
                   {action.label}
                 </button>
               ))}
-              {!activePendingAction && quickActions.length > compactQuickActions.length ? (
+              {!activePendingAction && !activeClarificationPending && quickActions.length > compactQuickActions.length ? (
                 <button
                   type="button"
                   onClick={() => setShowComposerSuggestions(true)}
