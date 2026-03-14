@@ -11,6 +11,8 @@ SourceName = Literal[
     "walmart",
     "nutritionfaktory",
     "dps",
+    "staples",
+    "iherb",
 ]
 
 
@@ -30,6 +32,7 @@ class ProductCandidateData:
     confidence_source: float
     raw_snapshot_ref: str
     image_url: str | None = None
+    spec_text: str | None = None
 
     def to_public_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -71,6 +74,32 @@ class VisualRecord:
 
 
 @dataclass(slots=True)
+class EvidenceRecordData:
+    source: str
+    source_bucket: Literal["commerce", "review", "visual"]
+    content_kind: Literal["offer", "review", "discussion", "listing_summary", "visual_meta"]
+    domain: str
+    url: str
+    evidence_id: str
+    product_signature: str
+    product_title: str
+    review_like: bool
+    accepted_in_review_corpus: bool
+    relevance_score: float
+    rejection_reasons: list[str]
+    extraction_method: str
+    clean_excerpt: str
+    rating: float | None
+    helpful_votes: int
+    retrieved_at: str
+    confidence_source: float
+    raw_snapshot_ref: str
+
+    def to_public_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
 class CollectorTraceEvent:
     source: str
     step: str
@@ -87,6 +116,7 @@ class CollectionResult:
     products: list[ProductCandidateData] = field(default_factory=list)
     reviews: list[ReviewRecord] = field(default_factory=list)
     visuals: list[VisualRecord] = field(default_factory=list)
+    evidence_records: list[EvidenceRecordData] = field(default_factory=list)
     trace: list[CollectorTraceEvent] = field(default_factory=list)
     missing_evidence: list[str] = field(default_factory=list)
     blocked_sources: list[str] = field(default_factory=list)
@@ -98,6 +128,7 @@ class CollectionResult:
             "products": [item.to_public_dict() for item in self.products],
             "reviews": [item.to_public_dict() for item in self.reviews],
             "visuals": [item.to_public_dict() for item in self.visuals],
+            "evidenceRecords": [item.to_public_dict() for item in self.evidence_records],
             "trace": [item.to_public_dict() for item in self.trace],
             "missingEvidence": list(self.missing_evidence),
             "blockedSources": list(self.blocked_sources),

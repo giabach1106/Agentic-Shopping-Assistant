@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from app.core.config import Settings
+
+logger = logging.getLogger(__name__)
 
 
 def _clamp(value: float, minimum: float = 0.0, maximum: float = 1.0) -> float:
@@ -48,6 +51,10 @@ class TrustScoreResult:
     status: str
     decision: DecisionPayload | None
     scientific_score: dict[str, float]
+    score_breakdown: dict[str, float]
+    decision_summary: str
+    decision_diagnostics: dict[str, Any]
+    evidence_diagnostics: dict[str, Any]
     evidence_stats: dict[str, Any]
     coverage_audit: dict[str, Any]
     trace: list[dict[str, Any]]
@@ -62,6 +69,10 @@ class TrustScoreResult:
             "status": self.status,
             "decision": self.decision.to_public_dict() if self.decision else None,
             "scientificScore": self.scientific_score,
+            "scoreBreakdown": self.score_breakdown,
+            "decisionSummary": self.decision_summary,
+            "decisionDiagnostics": self.decision_diagnostics,
+            "evidenceDiagnostics": self.evidence_diagnostics,
             "evidenceStats": self.evidence_stats,
             "coverageAudit": self.coverage_audit,
             "trace": self.trace,
@@ -76,6 +87,94 @@ class TrustScoreResult:
 class TrustScoringEngine:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+
+    def _product_fit_score(
+        self,
+        *,
+        rating_reliability: float,
+        absa_alignment: float,
+        candidate_count: int,
+        rated_coverage_ratio: float,
+    ) -> float:
+        candidate_signal = _clamp(candidate_count / 5.0)
+        return _clamp(
+            (0.4 * rating_reliability)
+            + (0.35 * absa_alignment)
+            + (0.15 * candidate_signal)
+            + (0.1 * _clamp(rated_coverage_ratio)),
+        )
+
+    def _evidence_confidence_score(
+        self,
+        *,
+        spam_authenticity: float,
+        visual_reliability: float,
+        review_confidence: float,
+        accepted_review_count: int,
+        source_coverage: int,
+        rating_count: int,
+    ) -> float:
+        accepted_signal = _clamp(accepted_review_count / max(1, self._settings.min_review_count * 2))
+        coverage_signal = _clamp(source_coverage / max(1, self._settings.min_source_coverage + 1))
+        rating_signal = _clamp(math.log1p(max(0, rating_count)) / math.log1p(250))
+        return _clamp(
+            (0.28 * spam_authenticity)
+            + (0.2 * visual_reliability)
+            + (0.18 * _clamp(review_confidence))
+            + (0.14 * accepted_signal)
+            + (0.1 * coverage_signal)
+            + (0.1 * rating_signal)
+        )
+
+    def _crawl_health_score(
+        self,
+        *,
+        commerce_source_coverage: int,
+        blocked_commerce_sources: list[str],
+        freshness_seconds: int,
+        candidate_count: int,
+    ) -> float:
+        coverage_signal = _clamp(commerce_source_coverage / max(1, self._settings.min_source_coverage))
+        freshness_signal = 1.0 if freshness_seconds <= (self._settings.evidence_freshness_minutes * 60) else 0.45
+        blocker_penalty = min(0.4, 0.12 * len(blocked_commerce_sources))
+        candidate_signal = _clamp(candidate_count / 6.0)
+        return _clamp((0.4 * coverage_signal) + (0.25 * freshness_signal) + (0.35 * candidate_signal) - blocker_penalty)
+
+    def _decision_summary(
+        self,
+        *,
+        selected_candidate: dict[str, Any] | None,
+        verdict: str,
+        coverage_confidence: str,
+        commerce_source_coverage: int,
+        accepted_review_sources: dict[str, int],
+        candidate_count: int,
+    ) -> str:
+        trusted_review_sources = len([key for key, value in accepted_review_sources.items() if int(value) > 0])
+        if not selected_candidate and candidate_count == 0:
+            return (
+                "I still do not have a reliable shortlist because the matched offers or review evidence are too thin."
+            )
+        title = str((selected_candidate or {}).get("title") or "the current shortlist").strip()
+        if verdict == "BUY":
+            return (
+                f"Best current option is {title}. Offer quality and review evidence line up well enough for a confident recommendation."
+            )
+        if verdict == "WAIT":
+            if commerce_source_coverage <= 1 and trusted_review_sources == 0:
+                return (
+                    f"Best current option is {title}, but confidence is still moderate because only one marketplace is carrying the evidence and matched reviews are still thin."
+                )
+            if trusted_review_sources == 0:
+                return (
+                    f"Best current option is {title}, but I still want broader review confirmation before treating it as a strong pick."
+                )
+            return (
+                f"Best current option is {title}, but confidence is still moderate because the evidence is useful, not broad."
+            )
+        return (
+            f"{title} is not convincing yet because the evidence quality is still weaker than the product-fit signal."
+        )
 
     def evaluate(
         self,
@@ -168,23 +267,54 @@ class TrustScoringEngine:
         spam_authenticity = self._spam_authenticity_score(review)
         absa_alignment = self._absa_alignment_score(review, constraints)
         visual_reliability = self._visual_reliability_score(visual)
-
-        final_trust = round(
-            100
-            * (
-                (0.3 * rating_reliability)
-                + (0.3 * spam_authenticity)
-                + (0.2 * absa_alignment)
-                + (0.2 * visual_reliability)
-            ),
-            2,
+        evidence_diagnostics = dict(
+            review.get("evidenceDiagnostics")
+            or collect.get("evidenceDiagnostics")
+            or {}
         )
+        product_fit = self._product_fit_score(
+            rating_reliability=rating_reliability,
+            absa_alignment=absa_alignment,
+            candidate_count=candidate_count,
+            rated_coverage_ratio=rated_coverage_ratio,
+        )
+        evidence_confidence = self._evidence_confidence_score(
+            spam_authenticity=spam_authenticity,
+            visual_reliability=visual_reliability,
+            review_confidence=float(review.get("confidence") or 0.0),
+            accepted_review_count=int(evidence_diagnostics.get("acceptedReviewCount") or review_count),
+            source_coverage=source_coverage,
+            rating_count=rating_count,
+        )
+        crawl_health = self._crawl_health_score(
+            commerce_source_coverage=commerce_source_coverage,
+            blocked_commerce_sources=blocked_commerce_sources,
+            freshness_seconds=int(collect.get("freshnessSeconds") or 999999),
+            candidate_count=candidate_count,
+        )
+        decision_score = round(
+            _clamp(
+                (0.45 * product_fit)
+                + (0.3 * evidence_confidence)
+                + (0.2 * crawl_health)
+                + (0.05 * _clamp(math.log1p(max(0, rating_count)) / math.log1p(500)))
+                + (0.03 if coverage_confidence == "strong" and candidate_count > 0 else 0.0)
+            ),
+            4,
+        )
+        final_trust = round(100 * decision_score, 2)
         scientific_score = {
             "ratingReliability": round(rating_reliability, 4),
             "spamAuthenticity": round(spam_authenticity, 4),
             "absaAlignment": round(absa_alignment, 4),
             "visualReliability": round(visual_reliability, 4),
             "finalTrust": final_trust,
+        }
+        score_breakdown = {
+            "productFit": round(product_fit * 100, 2),
+            "evidenceConfidence": round(evidence_confidence * 100, 2),
+            "crawlHealth": round(crawl_health * 100, 2),
+            "decisionScore": final_trust,
         }
 
         evidence_stats = {
@@ -200,6 +330,9 @@ class TrustScoringEngine:
             "missingFields": missing_evidence,
             "coverageConfidence": coverage_confidence,
             "checkoutReadiness": checkout_readiness,
+            "acceptedReviewCount": int(evidence_diagnostics.get("acceptedReviewCount") or review_count),
+            "evidenceDiagnostics": evidence_diagnostics,
+            "promoLikelihoodStatus": str(review.get("promoLikelihoodStatus") or "known"),
         }
         coverage_audit = {
             "isSufficient": coverage_is_sufficient,
@@ -224,12 +357,52 @@ class TrustScoringEngine:
             "sourceHealth": source_health,
         }
         trace = self._build_trace(agent_outputs)
+        decision_summary = self._decision_summary(
+            selected_candidate=self._select_candidate(price),
+            verdict="WAIT",
+            coverage_confidence=coverage_confidence,
+            commerce_source_coverage=commerce_source_coverage,
+            accepted_review_sources=dict(evidence_diagnostics.get("acceptedReviewSources") or {}),
+            candidate_count=candidate_count,
+        )
+        decision_diagnostics = {
+            "inputCounts": {
+                "candidateCount": candidate_count,
+                "reviewCount": review_count,
+                "ratingCount": rating_count,
+                "sourceCoverage": source_coverage,
+                "commerceSourceCoverage": commerce_source_coverage,
+            },
+            "acceptedRejected": {
+                "acceptedReviewCount": int(evidence_diagnostics.get("acceptedReviewCount") or review_count),
+                "totalEvidenceCount": int(evidence_diagnostics.get("totalEvidenceCount") or review_count),
+            },
+            "rejectionReasons": dict(evidence_diagnostics.get("rejectionReasons") or {}),
+            "sourceHealth": source_health,
+            "scoreContribution": {
+                "productFit": round(product_fit, 4),
+                "evidenceConfidence": round(evidence_confidence, 4),
+                "crawlHealth": round(crawl_health, 4),
+                "decisionScore": decision_score,
+                "ratingReliability": round(rating_reliability, 4),
+                "spamAuthenticity": round(spam_authenticity, 4),
+                "absaAlignment": round(absa_alignment, 4),
+                "visualReliability": round(visual_reliability, 4),
+            },
+            "coverageConfidence": coverage_confidence,
+            "checkoutReadiness": checkout_readiness,
+            "promoLikelihoodStatus": str(review.get("promoLikelihoodStatus") or "known"),
+        }
 
-        if coverage_confidence == "weak" and self._settings.runtime_mode == "prod":
+        if coverage_confidence == "weak" and candidate_count == 0 and self._settings.runtime_mode == "prod":
             return TrustScoreResult(
                 status="NEED_DATA",
                 decision=None,
                 scientific_score=scientific_score,
+                score_breakdown=score_breakdown,
+                decision_summary=decision_summary,
+                decision_diagnostics=decision_diagnostics,
+                evidence_diagnostics=evidence_diagnostics,
                 evidence_stats=evidence_stats,
                 coverage_audit=coverage_audit,
                 trace=trace,
@@ -241,14 +414,16 @@ class TrustScoringEngine:
             )
 
         verdict = "AVOID"
-        if final_trust >= 75:
+        if product_fit >= 0.65 and evidence_confidence >= 0.55 and crawl_health >= 0.45:
             verdict = "BUY"
-        elif final_trust >= 55:
+        elif candidate_count > 0 and product_fit >= 0.45:
             verdict = "WAIT"
-        if verdict == "AVOID" and candidate_count >= 5 and rated_coverage_ratio < 0.6:
+        if verdict == "AVOID" and candidate_count >= 1 and evidence_confidence >= 0.38:
             verdict = "WAIT"
         if coverage_confidence == "limited" and verdict == "BUY":
             verdict = "WAIT"
+        if evidence_confidence < 0.4 or crawl_health < 0.35:
+            verdict = "WAIT" if candidate_count > 0 else "AVOID"
 
         risk_flags = [str(item) for item in review.get("riskFlags", [])]
         risk_flags.extend(str(item) for item in visual.get("visualRisks", []))
@@ -266,22 +441,14 @@ class TrustScoringEngine:
                 f"Checkout handoff readiness is {checkout_readiness}; recommendation is based on evidence, not checkout automation."
             )
 
+        selected_candidate = self._select_candidate(price)
         top_reasons = [
-            (
-                f"Rating reliability {round(100 * rating_reliability, 1)}/100 "
-                "blends Bayesian + Wilson confidence."
-            ),
-            (
-                f"Authenticity {round(100 * spam_authenticity, 1)}/100 "
-                "reflects promo risk and duplicate-review penalties."
-            ),
-            (
-                f"Visual confidence {round(100 * visual_reliability, 1)}/100 "
-                f"with source coverage at {source_coverage}."
-            ),
+            f"Product fit is {round(product_fit * 100, 1)}/100 based on rating strength and constraint alignment.",
+            f"Evidence confidence is {round(evidence_confidence * 100, 1)}/100 after filtering noisy review sources.",
+            f"Crawl health is {round(crawl_health * 100, 1)}/100 with {commerce_source_coverage} commerce sources and freshness at {evidence_stats['freshnessSeconds']}s.",
             f"Coverage confidence is {coverage_confidence} with {candidate_count} normalized offers.",
         ]
-        if candidate_count >= 5 and rated_coverage_ratio < 0.6:
+        if candidate_count >= 1 and rated_coverage_ratio < 0.6:
             top_reasons.insert(
                 0,
                 (
@@ -290,10 +457,10 @@ class TrustScoringEngine:
                 ),
             )
         why_ranked_here = [
-            f"ratingReliability={scientific_score['ratingReliability']}",
-            f"spamAuthenticity={scientific_score['spamAuthenticity']}",
-            f"absaAlignment={scientific_score['absaAlignment']}",
-            f"visualReliability={scientific_score['visualReliability']}",
+            f"productFit={round(product_fit, 4)}",
+            f"evidenceConfidence={round(evidence_confidence, 4)}",
+            f"crawlHealth={round(crawl_health, 4)}",
+            f"decisionScore={decision_score}",
             (
                 f"sourceCoverage={source_coverage}, commerceSourceCoverage={commerce_source_coverage}, "
                 f"reviewCount={review_count}, ratingCount={rating_count}, "
@@ -301,6 +468,14 @@ class TrustScoringEngine:
             ),
             f"coverageConfidence={coverage_confidence}, checkoutReadiness={checkout_readiness}",
         ]
+        decision_summary = self._decision_summary(
+            selected_candidate=selected_candidate,
+            verdict=verdict,
+            coverage_confidence=coverage_confidence,
+            commerce_source_coverage=commerce_source_coverage,
+            accepted_review_sources=dict(evidence_diagnostics.get("acceptedReviewSources") or {}),
+            candidate_count=candidate_count,
+        )
         decision = DecisionPayload(
             verdict=verdict,
             final_trust=final_trust,
@@ -308,12 +483,16 @@ class TrustScoringEngine:
             top_reasons=top_reasons,
             risk_flags=sorted(set(risk_flags)),
             why_ranked_here=why_ranked_here,
-            selected_candidate=self._select_candidate(price),
+            selected_candidate=selected_candidate,
         )
         return TrustScoreResult(
             status="OK",
             decision=decision,
             scientific_score=scientific_score,
+            score_breakdown=score_breakdown,
+            decision_summary=decision_summary,
+            decision_diagnostics=decision_diagnostics,
+            evidence_diagnostics=evidence_diagnostics,
             evidence_stats=evidence_stats,
             coverage_audit=coverage_audit,
             trace=trace,
@@ -336,11 +515,12 @@ class TrustScoringEngine:
     ) -> str:
         if candidate_count <= 0:
             return "weak"
-        if coverage_is_sufficient:
-            return "strong"
+        strong_single_source = commerce_source_coverage >= 1 and rating_count >= 200 and review_count >= 1
         if commerce_source_coverage >= 2 and review_count >= self._settings.min_review_count:
             return "strong"
-        if commerce_source_coverage >= 1:
+        if coverage_is_sufficient and (commerce_source_coverage >= 2 or strong_single_source):
+            return "strong"
+        if commerce_source_coverage >= 1 and (rating_count >= 50 or review_count >= 1):
             return "limited"
         if blocked_commerce_sources and rating_count > 0:
             return "limited"
@@ -370,10 +550,17 @@ class TrustScoringEngine:
         return _clamp((0.6 * bayes_norm) + (0.4 * wilson))
 
     def _spam_authenticity_score(self, review: dict[str, Any]) -> float:
-        promo = _clamp(float(review.get("paidPromoLikelihood") or 0.0))
+        promo_status = str(review.get("promoLikelihoodStatus") or "known").strip().lower()
+        promo = (
+            0.5
+            if promo_status == "unknown"
+            else _clamp(float(review.get("paidPromoLikelihood") or 0.0))
+        )
         duplicates = review.get("duplicateReviewClusters") or []
         dup_penalty = min(0.35, 0.08 * len(duplicates))
         quality = _clamp(float(review.get("evidenceQualityScore") or 0.5))
+        if promo_status == "unknown":
+            return _clamp((0.25 * (1.0 - promo)) + (0.75 * quality) - dup_penalty)
         return _clamp((0.55 * (1.0 - promo)) + (0.45 * quality) - dup_penalty)
 
     def _absa_alignment_score(

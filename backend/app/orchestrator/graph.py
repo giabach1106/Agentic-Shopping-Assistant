@@ -52,6 +52,10 @@ class OrchestratorResult:
     checkout_readiness: str
     clarification_pending: dict[str, Any] | None
     source_health: dict[str, Any]
+    score_breakdown: dict[str, Any]
+    decision_summary: str
+    decision_diagnostics: dict[str, Any]
+    evidence_diagnostics: dict[str, Any]
     state: dict[str, Any]
 
 
@@ -115,6 +119,10 @@ class AgentOrchestrator:
             "crawl_meta": dict(previous_state.get("crawl_meta") or {}),
             "coverage_confidence": str(previous_state.get("coverage_confidence") or "weak"),
             "checkout_readiness": str(previous_state.get("checkout_readiness") or "unknown"),
+            "score_breakdown": dict(previous_state.get("score_breakdown") or {}),
+            "decision_summary": str(previous_state.get("decision_summary") or ""),
+            "decision_diagnostics": dict(previous_state.get("decision_diagnostics") or {}),
+            "evidence_diagnostics": dict(previous_state.get("evidence_diagnostics") or {}),
         }
         final_state = await self._graph.ainvoke(initial_state)
         decision_payload = (
@@ -153,6 +161,10 @@ class AgentOrchestrator:
             checkout_readiness=str(decision_payload.get("checkoutReadiness") or "unknown"),
             clarification_pending=final_state.get("clarification_pending"),
             source_health=dict(final_state.get("source_health") or {}),
+            score_breakdown=dict(decision_payload.get("scoreBreakdown") or {}),
+            decision_summary=str(decision_payload.get("decisionSummary") or ""),
+            decision_diagnostics=dict(decision_payload.get("decisionDiagnostics") or {}),
+            evidence_diagnostics=dict(decision_payload.get("evidenceDiagnostics") or {}),
             state=dict(final_state),
         )
 
@@ -483,6 +495,7 @@ class AgentOrchestrator:
             reply = format_decision_reply(
                 decision=decision,
                 scientific_score=decision_output.get("scientificScore", {}),
+                decision_summary=str(decision_output.get("decisionSummary") or ""),
             )
         clarification_pending = state.get("clarification_pending")
         if (
@@ -520,6 +533,10 @@ class AgentOrchestrator:
             "crawl_meta": dict(state.get("crawl_meta") or {}),
             "coverage_confidence": str(decision_output.get("coverageConfidence") or "weak"),
             "checkout_readiness": str(decision_output.get("checkoutReadiness") or "unknown"),
+            "score_breakdown": dict(decision_output.get("scoreBreakdown") or {}),
+            "decision_summary": str(decision_output.get("decisionSummary") or ""),
+            "decision_diagnostics": dict(decision_output.get("decisionDiagnostics") or {}),
+            "evidence_diagnostics": dict(decision_output.get("evidenceDiagnostics") or {}),
         }
 
     def _has_confirmed_action(

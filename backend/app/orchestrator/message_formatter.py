@@ -109,7 +109,10 @@ def format_confirmation_reply(prompt: str) -> str:
 def format_decision_reply(
     decision: dict[str, Any],
     scientific_score: dict[str, Any],
+    decision_summary: str | None = None,
 ) -> str:
+    if decision_summary and decision_summary.strip():
+        return decision_summary.strip()
     verdict = str(decision.get("verdict") or "PENDING").upper()
     trust = scientific_score.get("finalTrust")
     trust_text = (
@@ -142,6 +145,10 @@ def build_assistant_meta(
     coverage_confidence: str | None = None,
     checkout_readiness: str | None = None,
     source_health: dict[str, Any] | None = None,
+    decision_summary: str | None = None,
+    score_breakdown: dict[str, Any] | None = None,
+    decision_diagnostics: dict[str, Any] | None = None,
+    evidence_diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     verdict = None
     top_reasons: list[str] = []
@@ -152,6 +159,7 @@ def build_assistant_meta(
             top_reasons = [str(item).strip() for item in raw_reasons if str(item).strip()]
     return {
         "summary": reply,
+        "decisionSummary": decision_summary,
         "verdict": verdict,
         "trust": scientific_score.get("finalTrust"),
         "topReasons": top_reasons[:3],
@@ -170,4 +178,7 @@ def build_assistant_meta(
         "coverageConfidence": coverage_confidence,
         "checkoutReadiness": checkout_readiness,
         "sourceHealth": source_health or {},
+        "scoreBreakdown": score_breakdown or {},
+        "decisionDiagnostics": decision_diagnostics or {},
+        "evidenceDiagnostics": evidence_diagnostics or {},
     }

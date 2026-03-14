@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import UTC, datetime
 from statistics import mean
@@ -22,10 +23,18 @@ from app.orchestrator.domain_support import (
 from app.orchestrator.search_brief import SearchBrief
 from app.rag.base import RetrievalDocument
 from app.rag.providers import HybridRAGService
+from app.services.evidence_precision import (
+    build_collection_from_persisted_evidence,
+    evidence_diagnostics,
+    normalize_collection_evidence,
+    summarize_review_bullets,
+)
 from app.services.review_analysis import ReviewEvidenceAnalyzer
 from app.services.trust_scoring import TrustScoringEngine
 from app.services.visual_analysis import VisualEvidenceAnalyzer
 from app.tools.ui_executor import UIExecutionRequest, UIExecutor
+
+logger = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
@@ -218,6 +227,14 @@ def _constraint_match_score(title: str, constraints: dict[str, Any]) -> int:
     return constraint_match_score(title, constraints)
 
 
+def _candidate_match_text(item: dict[str, Any]) -> str:
+    title = str(item.get("title") or "").strip()
+    spec_text = str(item.get("spec_text") or item.get("specText") or "").strip()
+    if spec_text:
+        return f"{title} {spec_text}".strip()
+    return title
+
+
 def _normalize_delivery_preference(value: str | None) -> str:
     normalized = str(value or "").strip().lower()
     normalized = re.sub(r"\s+", " ", normalized)
@@ -295,6 +312,12 @@ def _sanitize_collection_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(item, dict)
         and str(item.get("image_url") or item.get("imageUrl") or "").strip()
     ]
+    evidence_records = [
+        dict(item)
+        for item in payload.get("evidenceRecords", [])
+        if isinstance(item, dict)
+        and str(item.get("evidenceId") or item.get("evidence_id") or "").strip()
+    ]
     trace = [
         dict(item)
         for item in payload.get("trace", [])
@@ -320,6 +343,7 @@ def _sanitize_collection_payload(payload: dict[str, Any]) -> dict[str, Any]:
     sanitized["products"] = products
     sanitized["reviews"] = reviews
     sanitized["visuals"] = visuals
+    sanitized["evidenceRecords"] = evidence_records
     sanitized["trace"] = trace
     sanitized["missingEvidence"] = missing
     sanitized["blockedSources"] = blocked
@@ -327,7 +351,7 @@ def _sanitize_collection_payload(payload: dict[str, Any]) -> dict[str, Any]:
         sanitized["sourceHealth"] = source_health
     if crawl_meta:
         sanitized["crawlMeta"] = crawl_meta
-    if not any([products, reviews, visuals, trace, missing, blocked, source_health, crawl_meta]):
+    if not any([products, reviews, visuals, evidence_records, trace, missing, blocked, source_health, crawl_meta]):
         return {}
     return sanitized
 
@@ -374,7 +398,7 @@ class PlannerAgent:
             payload={
                 "prompt": (
                     "Extract strict shopping constraints as JSON with keys "
-                    "category,budgetMax,minRating,deliveryDeadline,mustHave,niceToHave,"
+                    "category,budgetMax,minRating,deliveryDeadline,widthMinInches,widthMaxInches,mustHave,niceToHave,"
                     "exclude,consentAutofill,visualEvidence. "
                     f"User message: {message}"
                 )
@@ -475,6 +499,8 @@ class PlannerAgent:
             "budgetMax",
             "minRating",
             "deliveryDeadline",
+            "widthMinInches",
+            "widthMaxInches",
             "mustHave",
             "niceToHave",
             "exclude",
@@ -640,6 +666,27 @@ class PlannerAgent:
             elif "fast delivery" in lower or "fast shipping" in lower:
                 delivery_deadline = "fast delivery"
 
+        width_min_inches = None
+        width_max_inches = None
+        width_patterns = [
+            (r"(?:above|over|at least|minimum|min)\s+([0-9]{2,3}(?:\.\d+)?)\s*(?:\"|inches|inch)\s*(?:wide|width)?", "min"),
+            (r"(?:under|below|at most|maximum|max|less than)\s+([0-9]{2,3}(?:\.\d+)?)\s*(?:\"|inches|inch)\s*(?:wide|width)?", "max"),
+            (r"([0-9]{2,3}(?:\.\d+)?)\s*(?:\"|inches|inch)\s*(?:or wider|wide or more)", "min"),
+            (r"([0-9]{2,3}(?:\.\d+)?)\s*(?:\"|inches|inch)\s*(?:or narrower|wide or less)", "max"),
+        ]
+        for pattern, bound in width_patterns:
+            match = re.search(pattern, lower)
+            if not match:
+                continue
+            try:
+                value = float(match.group(1))
+            except ValueError:
+                continue
+            if bound == "min":
+                width_min_inches = value
+            else:
+                width_max_inches = value
+
         must_have: list[str] = []
         if "ergonomic" in lower:
             must_have.append("ergonomic")
@@ -712,6 +759,8 @@ class PlannerAgent:
             "budgetMax": budget_max,
             "minRating": min_rating,
             "deliveryDeadline": delivery_deadline,
+            "widthMinInches": width_min_inches,
+            "widthMaxInches": width_max_inches,
             "mustHave": must_have,
             "niceToHave": [],
             "exclude": exclude,
@@ -773,7 +822,10 @@ class CoverageAuditorAgent:
         cached = await self._evidence_store.get_cached_collection(constraints)
         raw_cached_collection = dict(cached.get("collection") or {}) if cached else {}
         cached_collection = _strip_run_local_collection(
-            _sanitize_collection_payload(raw_cached_collection)
+            normalize_collection_evidence(
+                _sanitize_collection_payload(raw_cached_collection),
+                constraints=constraints,
+            )
         )
         cache_status = "hit" if cached_collection else "miss"
         if cached and cached_collection != raw_cached_collection:
@@ -789,11 +841,27 @@ class CoverageAuditorAgent:
             query=query or None,
             limit=180,
         )
-        catalog_collection = self._catalog_records_to_collection(catalog_records)
+        catalog_collection = normalize_collection_evidence(
+            self._catalog_records_to_collection(catalog_records),
+            constraints=constraints,
+        )
+        corpus_records = await self._evidence_store.list_evidence_records(
+            domain=search_brief.domain,
+            query=query or None,
+            limit=180,
+            accepted_only=True,
+        )
+        corpus_collection = build_collection_from_persisted_evidence(corpus_records)
         catalog_status = "hit" if catalog_records else "miss"
 
         collection = _sanitize_collection_payload(
-            self._merge_collections(cached_collection, catalog_collection)
+            normalize_collection_evidence(
+                self._merge_collections(
+                    self._merge_collections(cached_collection, catalog_collection),
+                    corpus_collection,
+                ),
+                constraints=constraints,
+            )
         )
         collection["trace"] = [
             _cache_trace_event(bool(cached_collection)),
@@ -823,6 +891,7 @@ class CoverageAuditorAgent:
             "ratedCoverageRatio": float(stats.get("ratedCoverageRatio", 0.0)),
             "freshnessSeconds": int(stats.get("freshnessSeconds", 999999)),
             "blockedCommerceSources": blocked_commerce_sources,
+            "evidenceDiagnostics": evidence_diagnostics(collection.get("evidenceRecords", [])),
             "collection": collection,
         }
 
@@ -831,8 +900,8 @@ class CoverageAuditorAgent:
         records: list[dict[str, Any]],
     ) -> dict[str, Any]:
         products: list[dict[str, Any]] = []
-        reviews: list[dict[str, Any]] = []
         visuals: list[dict[str, Any]] = []
+        evidence_records: list[dict[str, Any]] = []
         trace: list[dict[str, Any]] = [
             {
                 "source": "catalog",
@@ -872,34 +941,34 @@ class CoverageAuditorAgent:
                     "raw_snapshot_ref": "catalog://record",
                 }
             )
+            fallback_snippet = str(item.get("ingredient_text") or "").strip()
             snippets = item.get("review_snippets") or []
-            if not snippets:
-                fallback_snippet = str(item.get("ingredient_text") or "").strip()
-                if not fallback_snippet:
-                    fallback_snippet = f"Listing summary: {title}"
-                snippets = [fallback_snippet[:320]]
-            if isinstance(snippets, list):
-                for index, snippet in enumerate(snippets[:2]):
-                    text = str(snippet).strip()
-                    if not text:
-                        continue
-                    reviews.append(
-                        {
-                            "source": source,
-                            "url": url,
-                            "review_id": f"{evidence_id}::review::{index}",
-                            "rating": float(item.get("rating") or 0.0),
-                            "review_text": text,
-                            "timestamp": retrieved_at,
-                            "helpful_votes": 0,
-                            "verified_purchase": None,
-                            "media_count": 0,
-                            "retrieved_at": retrieved_at,
-                            "evidence_id": f"{evidence_id}::review::{index}",
-                            "confidence_source": 0.79,
-                            "raw_snapshot_ref": "catalog://review",
-                        }
-                    )
+            if isinstance(snippets, list) and snippets:
+                fallback_snippet = str(snippets[0]).strip() or fallback_snippet
+            if fallback_snippet:
+                evidence_records.append(
+                    {
+                        "source": source,
+                        "sourceBucket": "commerce",
+                        "contentKind": "listing_summary",
+                        "domain": infer_domain(title),
+                        "url": url,
+                        "evidenceId": f"{evidence_id}::listing_summary",
+                        "productSignature": title.lower(),
+                        "productTitle": title,
+                        "reviewLike": False,
+                        "acceptedInReviewCorpus": False,
+                        "relevanceScore": 0.82,
+                        "rejectionReasons": ["catalog_listing_summary"],
+                        "extractionMethod": "catalog_record",
+                        "cleanExcerpt": fallback_snippet[:320],
+                        "rating": float(item.get("rating") or 0.0) or None,
+                        "helpfulVotes": int(item.get("rating_count") or 0),
+                        "retrievedAt": retrieved_at,
+                        "confidenceSource": 0.79,
+                        "rawSnapshotRef": "catalog://record",
+                    }
+                )
             image_url = str(item.get("image_url") or "").strip()
             if image_url:
                 visuals.append(
@@ -916,8 +985,9 @@ class CoverageAuditorAgent:
                 )
         return {
             "products": products,
-            "reviews": reviews,
+            "reviews": [],
             "visuals": visuals,
+            "evidenceRecords": evidence_records,
             "trace": trace,
             "missingEvidence": [],
             "blockedSources": [],
@@ -929,7 +999,7 @@ class CoverageAuditorAgent:
         right: dict[str, Any],
     ) -> dict[str, Any]:
         merged: dict[str, Any] = {}
-        for key in ("products", "reviews", "visuals"):
+        for key in ("products", "reviews", "visuals", "evidenceRecords"):
             merged[key] = self._merge_entry_list(
                 left.get(key) if isinstance(left.get(key), list) else [],
                 right.get(key) if isinstance(right.get(key), list) else [],
@@ -1144,7 +1214,10 @@ class EvidenceCollectionAgent:
         cached = await self._evidence_store.get_cached_collection(constraints)
         raw_cached_collection = dict(cached.get("collection") or {}) if cached else {}
         cached_collection = _strip_run_local_collection(
-            _sanitize_collection_payload(raw_cached_collection)
+            normalize_collection_evidence(
+                _sanitize_collection_payload(raw_cached_collection),
+                constraints=constraints,
+            )
         )
         cached_stats = dict(cached.get("stats") or {}) if cached else {}
         if cached and cached_collection != raw_cached_collection:
@@ -1155,10 +1228,22 @@ class EvidenceCollectionAgent:
             )
 
         search_brief = SearchBrief.from_constraints(constraints)
+        corpus_records = await self._evidence_store.list_evidence_records(
+            domain=search_brief.domain,
+            query=search_brief.query_for("amazon") or None,
+            limit=180,
+            accepted_only=True,
+        )
         collection = _sanitize_collection_payload(
-            self._merge_collections(
-                _sanitize_collection_payload(dict(seed_collection or {})),
-                dict(cached_collection or {}),
+            normalize_collection_evidence(
+                self._merge_collections(
+                    self._merge_collections(
+                        _sanitize_collection_payload(dict(seed_collection or {})),
+                        dict(cached_collection or {}),
+                    ),
+                    build_collection_from_persisted_evidence(corpus_records),
+                ),
+                constraints=constraints,
             )
         )
         crawl_meta = dict(collection.get("crawlMeta") or {})
@@ -1175,13 +1260,28 @@ class EvidenceCollectionAgent:
 
         if force_collect or not sufficiency["isSufficient"]:
             result = await self._collector.collect(constraints)
-            fresh_payload = _sanitize_collection_payload(result.to_public_dict())
-            collection = _sanitize_collection_payload(self._merge_collections(collection, fresh_payload))
+            fresh_payload = normalize_collection_evidence(
+                _sanitize_collection_payload(result.to_public_dict()),
+                constraints=constraints,
+            )
+            collection = _sanitize_collection_payload(
+                normalize_collection_evidence(
+                    self._merge_collections(collection, fresh_payload),
+                    constraints=constraints,
+                )
+            )
             crawl_meta = dict(collection.get("crawlMeta") or {})
             crawl_meta["searchBrief"] = search_brief.to_public_dict()
             collection["crawlMeta"] = crawl_meta
             stats = self._build_stats(collection)
             sufficiency = self._evaluate_sufficiency(stats)
+            await self._evidence_store.upsert_evidence_records(
+                [
+                    dict(item)
+                    for item in collection.get("evidenceRecords", [])
+                    if isinstance(item, dict)
+                ]
+            )
             await self._evidence_store.upsert_cached_collection(
                 constraints,
                 _strip_run_local_collection(collection),
@@ -1218,6 +1318,7 @@ class EvidenceCollectionAgent:
             "catalogStatus": catalog_status,
             "crawlPerformed": crawl_performed,
             "sufficiency": sufficiency,
+            "evidenceDiagnostics": evidence_diagnostics(collection.get("evidenceRecords", [])),
             "coverageAudit": {
                 "isSufficient": bool(sufficiency.get("isSufficient")),
                 "missing": [str(item) for item in sufficiency.get("missing", [])],
@@ -1292,7 +1393,7 @@ class EvidenceCollectionAgent:
         fresh: dict[str, Any],
     ) -> dict[str, Any]:
         merged: dict[str, Any] = {}
-        for key in ("products", "reviews", "visuals"):
+        for key in ("products", "reviews", "visuals", "evidenceRecords"):
             cached_entries = cached.get(key) if isinstance(cached.get(key), list) else []
             fresh_entries = fresh.get(key) if isinstance(fresh.get(key), list) else []
             merged[key] = self._merge_entry_list(cached_entries, fresh_entries)
@@ -1390,6 +1491,7 @@ class EvidenceCollectionAgent:
             "ratedCoverageRatio": rated_coverage_ratio,
             "freshnessSeconds": freshness_seconds,
             "blockedCommerceSources": blocked_commerce_sources,
+            "evidenceDiagnostics": evidence_diagnostics(payload.get("evidenceRecords", [])),
         }
 
     def _evaluate_sufficiency(self, stats: dict[str, Any]) -> dict[str, Any]:
@@ -1462,6 +1564,16 @@ class ReviewIntelligenceAgent:
         collection = collection or {}
         reviews = collection.get("reviews", []) if isinstance(collection, dict) else []
         products = collection.get("products", []) if isinstance(collection, dict) else []
+        evidence_records = collection.get("evidenceRecords", []) if isinstance(collection, dict) else []
+        evidence_lookup = {
+            str(item.get("evidenceId") or ""): item
+            for item in evidence_records
+            if isinstance(item, dict) and str(item.get("evidenceId") or "").strip()
+        }
+        diagnostics = evidence_diagnostics(
+            [dict(item) for item in evidence_records if isinstance(item, dict)]
+        )
+        domain = infer_domain(str(constraints.get("category") or ""))
 
         docs = [
             RetrievalDocument(
@@ -1471,6 +1583,33 @@ class ReviewIntelligenceAgent:
                 metadata={
                     "helpfulVotes": int(item.get("helpful_votes") or 0),
                     "rating": float(item.get("rating") or 0.0),
+                    "contentKind": str(
+                        (
+                            evidence_lookup.get(
+                                str(item.get("evidence_id") or item.get("evidenceId") or "")
+                            )
+                            or {}
+                        ).get("contentKind")
+                        or "review"
+                    ),
+                    "relevanceScore": float(
+                        (
+                            evidence_lookup.get(
+                                str(item.get("evidence_id") or item.get("evidenceId") or "")
+                            )
+                            or {}
+                        ).get("relevanceScore")
+                        or 0.0
+                    ),
+                    "productMatch": float(
+                        (
+                            evidence_lookup.get(
+                                str(item.get("evidence_id") or item.get("evidenceId") or "")
+                            )
+                            or {}
+                        ).get("relevanceScore")
+                        or 0.0
+                    ),
                 },
             )
             for item in reviews
@@ -1483,7 +1622,8 @@ class ReviewIntelligenceAgent:
                 "pros": [],
                 "cons": [],
                 "riskFlags": ["No live review corpus available for analysis."],
-                "paidPromoLikelihood": 1.0,
+                "paidPromoLikelihood": None,
+                "promoLikelihoodStatus": "unknown",
                 "confidence": 0.0,
                 "sourceStats": {},
                 "evidenceRefs": [],
@@ -1491,6 +1631,9 @@ class ReviewIntelligenceAgent:
                 "duplicateReviewClusters": [],
                 "rankedEvidence": [],
                 "reviewCount": 0,
+                "commonComplaints": [],
+                "fitSummary": "Evidence is still too thin to summarize real-world usage.",
+                "evidenceDiagnostics": diagnostics,
                 "ratingSummary": {
                     "avgRating": 0.0,
                     "ratingCount": 0,
@@ -1523,15 +1666,24 @@ class ReviewIntelligenceAgent:
             session_id=session_id,
         )
 
-        positives = [doc for doc in docs if float(doc.metadata.get("rating") or 0) >= 4]
-        negatives = [doc for doc in docs if float(doc.metadata.get("rating") or 0) < 4]
-        pros = [item.content[:140] for item in positives[:3]]
-        cons = [item.content[:140] for item in negatives[:3]]
+        bullet_summary = summarize_review_bullets(
+            [dict(item) for item in reviews if isinstance(item, dict)],
+            domain=domain,
+        )
+        pros = [str(item).replace("_", " ").strip().capitalize() for item in bullet_summary["strengths"]][:4]
+        cons = [str(item).replace("_", " ").strip().capitalize() for item in bullet_summary["cautions"]][:4]
+        common_complaints = [
+            str(item).replace("_", " ").strip().capitalize()
+            for item in bullet_summary["commonComplaints"]
+        ][:3]
 
-        source_stats: dict[str, int] = {}
-        for review in reviews:
-            source = str(review.get("source") or "unknown")
-            source_stats[source] = source_stats.get(source, 0) + 1
+        source_stats = {
+            str(source): int(count)
+            for source, count in sorted(
+                dict(diagnostics.get("acceptedReviewSources") or {}).items(),
+                key=lambda entry: (-int(entry[1]), str(entry[0])),
+            )
+        }
 
         rating_count = sum(int(item.get("rating_count") or 0) for item in products)
         avg_rating = 0.0
@@ -1560,8 +1712,16 @@ class ReviewIntelligenceAgent:
             risk_flags.append("Duplicate review narratives detected across sources.")
         if len(evidence_refs) < 2:
             risk_flags.append("Low evidence coverage across sources.")
-
-        domain = infer_domain(str(constraints.get("category") or ""))
+        if int(diagnostics.get("acceptedReviewCount") or 0) < int(diagnostics.get("totalEvidenceCount") or 0):
+            top_rejections = sorted(
+                dict(diagnostics.get("rejectionReasons") or {}).items(),
+                key=lambda entry: (-int(entry[1]), str(entry[0])),
+            )[:2]
+            if top_rejections:
+                risk_flags.append(
+                    "Review corpus rejected noisy evidence: "
+                    + ", ".join(f"{reason}={count}" for reason, count in top_rejections)
+                )
         if domain in {"chair", "desk"}:
             aspects = {
                 "comfort": 0.0,
@@ -1607,6 +1767,7 @@ class ReviewIntelligenceAgent:
             "cons": cons,
             "riskFlags": risk_flags,
             "paidPromoLikelihood": promo_likelihood,
+            "promoLikelihoodStatus": "known",
             "confidence": round((0.5 * evidence_quality) + (0.5 * (1 - promo_likelihood)), 2),
             "sourceStats": source_stats,
             "evidenceRefs": evidence_refs,
@@ -1616,8 +1777,14 @@ class ReviewIntelligenceAgent:
                 {
                     "docId": item.doc_id,
                     "source": item.source,
+                    "kind": item.kind,
                     "qualityScore": item.quality_score,
                     "promoSignals": item.promo_signals,
+                    "relevanceScore": item.relevance_score,
+                    "sentimentScore": item.sentiment,
+                    "productMatch": item.product_match,
+                    "positiveSignals": item.positive_signals,
+                    "negativeSignals": item.negative_signals,
                     "excerpt": item.excerpt,
                 }
                 for item in ranked_evidence
@@ -1628,6 +1795,9 @@ class ReviewIntelligenceAgent:
                 "sourceStats": retrieval["sourceStats"],
             },
             "reviewCount": len(reviews),
+            "commonComplaints": common_complaints,
+            "fitSummary": str(bullet_summary["fitSummary"]),
+            "evidenceDiagnostics": diagnostics,
             "ratingSummary": {
                 "avgRating": avg_rating,
                 "ratingCount": rating_count,
@@ -1749,7 +1919,8 @@ class PriceLogisticsAgent:
                 title = str(item.get("title") or "").strip()
                 if not title or title.lower().startswith("unknown"):
                     continue
-                if not _is_candidate_title_relevant(title, constraints):
+                match_text = _candidate_match_text(item)
+                if not _is_candidate_title_relevant(match_text, constraints):
                     continue
                 source = str(item.get("source") or "").strip().lower()
                 rating = float(item.get("avg_rating") or 0.0)
@@ -1758,7 +1929,7 @@ class PriceLogisticsAgent:
                     continue
                 if min_rating is not None and (rating <= 0 or rating < min_rating):
                     continue
-                match_score = _constraint_match_score(title, constraints)
+                match_score = _constraint_match_score(match_text, constraints)
                 if match_score <= 0:
                     continue
                 constraint_tier = "strict"
@@ -1932,6 +2103,14 @@ class DecisionAgent:
         scoring_result = self._scoring_engine.evaluate(
             agent_outputs=agent_outputs,
             constraints=constraints or {},
+        )
+        logger.info(
+            "decision_diagnostics session_id=%s status=%s verdict=%s summary=%s diagnostics=%s",
+            session_id,
+            scoring_result.status,
+            scoring_result.decision.verdict if scoring_result.decision else "PENDING",
+            scoring_result.decision_summary,
+            scoring_result.decision_diagnostics,
         )
 
         output = scoring_result.to_public_dict()

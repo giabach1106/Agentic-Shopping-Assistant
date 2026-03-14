@@ -12,6 +12,8 @@ class SearchConstraints(BaseModel):
     budget_max: float | None = Field(default=None, alias="budgetMax")
     min_rating: float | None = Field(default=None, alias="minRating")
     delivery_deadline: str | None = Field(default=None, alias="deliveryDeadline")
+    width_min_inches: float | None = Field(default=None, alias="widthMinInches")
+    width_max_inches: float | None = Field(default=None, alias="widthMaxInches")
     must_have: list[str] = Field(default_factory=list, alias="mustHave")
     nice_to_have: list[str] = Field(default_factory=list, alias="niceToHave")
     exclude: list[str] = Field(default_factory=list)
@@ -35,6 +37,15 @@ class SearchConstraints(BaseModel):
         if value <= 0:
             raise ValueError("budgetMax must be greater than 0.")
         return round(value, 2)
+
+    @field_validator("width_min_inches", "width_max_inches")
+    @classmethod
+    def validate_width(cls, value: float | None) -> float | None:
+        if value is None:
+            return None
+        if value <= 0:
+            raise ValueError("width constraints must be greater than 0.")
+        return round(value, 1)
 
     @field_validator("must_have", "nice_to_have", "exclude")
     @classmethod
@@ -72,6 +83,9 @@ class SearchConstraints(BaseModel):
                 self.category = None
         if self.delivery_deadline:
             self.delivery_deadline = self.delivery_deadline.strip()
+        if self.width_min_inches is not None and self.width_max_inches is not None:
+            if self.width_min_inches > self.width_max_inches:
+                self.width_min_inches, self.width_max_inches = self.width_max_inches, self.width_min_inches
         return self
 
     def to_public_dict(self) -> dict[str, Any]:

@@ -77,6 +77,43 @@ _NOISE_TERMS = {
     "budget",
     "price",
 }
+_CHAIR_NEGATIVE_HINTS = (
+    "chair cover",
+    "seat cover",
+    "wheel set",
+    "caster",
+    "arm pad",
+    "replacement",
+    "chair mat",
+)
+_DESK_NEGATIVE_HINTS = (
+    "wire organizer",
+    "organizer",
+    "power strip holder",
+    "tray",
+    "mesh net",
+    "clamp",
+    "desk mat",
+    "converter accessory",
+)
+_DESK_POSITIVE_NOUNS = (
+    "desk",
+    "workstation",
+    "table",
+    "frame",
+    "sit stand",
+    "standing",
+)
+_DESK_ACCESSORY_PHRASES = (
+    "under desk",
+    "for desk",
+    "desk accessory",
+    "desk mount",
+)
+_WIDTH_PATTERNS = (
+    r"([0-9]{2,3}(?:\.[0-9]+)?)\s*(?:\"|inches|inch)\s*(?:wide|width|w)?",
+    r"(?:wide|width)\s*(?:of\s*)?([0-9]{2,3}(?:\.[0-9]+)?)\s*(?:\"|inches|inch)?",
+)
 
 
 def normalize_lookup(value: str) -> str:
@@ -168,11 +205,68 @@ def preference_terms(constraints: dict[str, Any]) -> list[str]:
     return deduped
 
 
+def width_constraints(constraints: dict[str, Any]) -> tuple[float | None, float | None]:
+    minimum = constraints.get("widthMinInches")
+    maximum = constraints.get("widthMaxInches")
+    try:
+        width_min = float(minimum) if minimum not in (None, "") else None
+    except (TypeError, ValueError):
+        width_min = None
+    try:
+        width_max = float(maximum) if maximum not in (None, "") else None
+    except (TypeError, ValueError):
+        width_max = None
+    return width_min, width_max
+
+
+def extract_width_inches(text: str) -> float | None:
+    lowered = normalize_lookup(text)
+    for pattern in _WIDTH_PATTERNS:
+        match = re.search(pattern, lowered, re.IGNORECASE)
+        if not match:
+            continue
+        try:
+            return float(match.group(1))
+        except ValueError:
+            continue
+    return None
+
+
+def title_violates_domain_constraints(title: str, constraints: dict[str, Any]) -> bool:
+    lower = normalize_lookup(title)
+    domain = infer_domain(str(constraints.get("category") or ""))
+    if domain == "chair" and any(token in lower for token in _CHAIR_NEGATIVE_HINTS):
+        return True
+    if domain == "desk":
+        has_core_desk_noun = any(
+            token in lower
+            for token in ("standing desk", "computer desk", "writing desk", "study desk", "office desk", "desk frame", "workstation", "sit stand", "table")
+        )
+        has_generic_desk_noun = "desk" in lower and not any(phrase in lower for phrase in _DESK_ACCESSORY_PHRASES)
+        has_product_signal = has_core_desk_noun or has_generic_desk_noun
+        if any(token in lower for token in _DESK_NEGATIVE_HINTS) and not has_product_signal:
+            return True
+        category = normalize_lookup(str(constraints.get("category") or ""))
+        if "standing desk" in category:
+            if not has_product_signal:
+                return True
+        width_min, width_max = width_constraints(constraints)
+        extracted_width = extract_width_inches(lower)
+        if extracted_width is not None:
+            if width_min is not None and extracted_width < width_min:
+                return True
+            if width_max is not None and extracted_width > width_max:
+                return True
+    return False
+
+
 def title_matches_constraints(title: str, constraints: dict[str, Any]) -> bool:
     lower = normalize_lookup(title)
     if not lower:
         return False
     if any(hint in lower for hint in _OFF_TOPIC_HINTS):
+        return False
+    if title_violates_domain_constraints(lower, constraints):
         return False
 
     domain = infer_domain(str(constraints.get("category") or ""))
@@ -196,6 +290,8 @@ def title_matches_constraints(title: str, constraints: dict[str, Any]) -> bool:
 
 def constraint_match_score(title: str, constraints: dict[str, Any]) -> int:
     lower = normalize_lookup(title)
+    if title_violates_domain_constraints(lower, constraints):
+        return 0
     domain = infer_domain(str(constraints.get("category") or ""))
     hints = domain_hints_for(domain)
     score = 2 if any(token in lower for token in hints) else 0
@@ -205,6 +301,15 @@ def constraint_match_score(title: str, constraints: dict[str, Any]) -> int:
     for term in preference_terms(constraints):
         if term in lower:
             score += 1
+    width_min, width_max = width_constraints(constraints)
+    extracted_width = extract_width_inches(lower)
+    if extracted_width is not None:
+        if width_min is not None and extracted_width >= width_min:
+            score += 2
+        if width_max is not None and extracted_width <= width_max:
+            score += 2
+    elif width_min is not None or width_max is not None:
+        score = max(0, score - 1)
     return score
 
 
@@ -283,6 +388,7 @@ def has_structured_constraint_signal(message: str) -> bool:
         r"(?:delivered by|by|before|within)\s+(?:(?:this|next)\s+)?(?:today|tomorrow|this week|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d)",
         r"\b(?:this week|fast delivery|fast shipping)\b",
         r"\b(?:clean ingredients|low lactose|third[- ]party tested|lumbar support|adjustable arms?)\b",
+        r"(?:above|over|under|below|at least|at most)\s+[0-9]{2,3}(?:\.[0-9]+)?\s*(?:\"|inches|inch)\s*(?:wide|width)?",
         r"(?:must have|need|want)\s+",
         r"(?:exclude|without|not)\s+",
     )

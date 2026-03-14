@@ -35,7 +35,6 @@ from app.services.token_auth import (
 )
 
 router = APIRouter()
-_COMMERCE_SOURCES = {"amazon", "ebay", "walmart", "nutritionfaktory", "dps"}
 _POSITIVE_MARKERS = (
     "third-party",
     "third party",
@@ -231,35 +230,18 @@ def _build_product_evidence_rows(
     if not isinstance(ranked, list):
         return []
     keywords = _keyword_tokens(product_title)
-    offer_sources = {
-        str(offer.get("source") or "").strip().lower()
-        for offer in offers
-        if isinstance(offer, dict)
-    }
-    offer_hosts = {
-        _source_host(str(offer.get("sourceUrl") or ""))
-        for offer in offers
-        if isinstance(offer, dict)
-    }
+    del offers
 
     scoped: list[dict[str, Any]] = []
     for raw in ranked:
         if not isinstance(raw, dict):
             continue
         source = str(raw.get("source") or "").strip().lower()
-        if source not in _COMMERCE_SOURCES:
-            continue
         excerpt = html.unescape(str(raw.get("excerpt") or "")).strip()
         doc_id = str(raw.get("docId") or "").strip()
         haystack = f"{excerpt} {doc_id}".lower()
         if keywords and not any(token in haystack for token in keywords):
             continue
-        if offer_sources and source not in offer_sources:
-            continue
-        if offer_hosts:
-            doc_host = _source_host(doc_id) if doc_id.startswith("http") else ""
-            if doc_host and doc_host not in offer_hosts:
-                continue
         positive_signals, negative_signals, sentiment_score = _sentiment_markers(haystack)
         promo_raw = raw.get("promoSignals")
         if isinstance(promo_raw, list):
@@ -267,16 +249,25 @@ def _build_product_evidence_rows(
         else:
             promo_count = _safe_int(promo_raw, 0)
             promo_signals = [f"promo_{idx + 1}" for idx in range(max(0, promo_count))]
+        positive_raw = raw.get("positiveSignals")
+        if isinstance(positive_raw, list):
+            positive_signals = [str(item).strip() for item in positive_raw if str(item).strip()] or positive_signals
+        negative_raw = raw.get("negativeSignals")
+        if isinstance(negative_raw, list):
+            negative_signals = [str(item).strip() for item in negative_raw if str(item).strip()] or negative_signals
         scoped.append(
             {
                 "docId": doc_id or f"{source}-evidence",
                 "source": source,
+                "kind": str(raw.get("kind") or "review"),
                 "qualityScore": _safe_quality_score(raw.get("qualityScore")),
+                "relevanceScore": _safe_quality_score(raw.get("relevanceScore")),
+                "productMatch": _safe_quality_score(raw.get("productMatch")),
                 "promoSignals": promo_signals[:4],
                 "excerpt": excerpt,
                 "positiveSignals": positive_signals,
                 "negativeSignals": negative_signals,
-                "sentimentScore": sentiment_score,
+                "sentimentScore": _safe_int(raw.get("sentimentScore"), sentiment_score),
             }
         )
 
@@ -330,6 +321,7 @@ def _build_product_insight(
     title: str,
     primary_offer: dict[str, Any],
     offers: list[dict[str, Any]],
+    review: dict[str, Any],
     ingredient_analysis: dict[str, Any],
     pros: list[str],
     cons: list[str],
@@ -371,15 +363,18 @@ def _build_product_insight(
         }
 
     if analysis_mode == "furniture":
+        fit_summary = str(review.get("fitSummary") or "").strip()
+        common_complaints = [str(item).strip() for item in review.get("commonComplaints", []) if str(item).strip()]
         strengths = _truncate_list(pros) or [
             "Best current signals lean on comfort, setup, and delivery evidence."
         ]
-        cautions = _truncate_list(cons) or [
+        cautions = _truncate_list(common_complaints + cons) or [
             "Review coverage is still limited, so check fit and assembly details before buying."
         ]
         if domain == "chair":
             headline = (
-                f"{title} currently looks strongest for ergonomic daily use, with {rating_text} "
+                fit_summary
+                or f"{title} currently looks strongest for ergonomic daily use, with {rating_text} "
                 f"and shipping around {primary_offer.get('shippingETA') or 'unknown'}."
             )
             attributes = [
@@ -388,7 +383,8 @@ def _build_product_insight(
             ]
         else:
             headline = (
-                f"{title} currently looks strongest for study or home-office setup, with {rating_text} "
+                fit_summary
+                or f"{title} currently looks strongest for study or home-office setup, with {rating_text} "
                 f"and shipping around {primary_offer.get('shippingETA') or 'unknown'}."
             )
             attributes = [
@@ -601,6 +597,7 @@ def _build_session_products(checkpoint: dict[str, Any], services: ServiceContain
             title=title,
             primary_offer=primary_offer,
             offers=merged_offers,
+            review=review,
             ingredient_analysis=analysis,
             pros=derived_pros,
             cons=derived_cons,
@@ -646,6 +643,10 @@ def _build_session_products(checkpoint: dict[str, Any], services: ServiceContain
                 "ingredientAnalysis": analysis,
                 "productInsight": product_insight,
                 "scientificScore": decision_block.get("scientificScore", {}),
+                "scoreBreakdown": decision_block.get("scoreBreakdown", {}),
+                "decisionSummary": decision_block.get("decisionSummary", ""),
+                "decisionDiagnostics": decision_block.get("decisionDiagnostics", {}),
+                "evidenceDiagnostics": decision_block.get("evidenceDiagnostics", {}),
                 "evidenceStats": decision_block.get("evidenceStats", {}),
                 "trace": decision_block.get("trace", []),
             }
@@ -763,6 +764,10 @@ async def chat(request: Request, payload: ChatRequest) -> ChatResponse:
             coverage_confidence=orchestration.coverage_confidence,
             checkout_readiness=orchestration.checkout_readiness,
             source_health=orchestration.source_health,
+            decision_summary=orchestration.decision_summary,
+            score_breakdown=orchestration.score_breakdown,
+            decision_diagnostics=orchestration.decision_diagnostics,
+            evidence_diagnostics=orchestration.evidence_diagnostics,
         ),
     )
     await services.session_service.save_state(payload.session_id, orchestration.state)
@@ -773,6 +778,10 @@ async def chat(request: Request, payload: ChatRequest) -> ChatResponse:
         reply=orchestration.reply,
         decision=orchestration.decision,
         scientificScore=orchestration.scientific_score,
+        scoreBreakdown=orchestration.score_breakdown,
+        decisionSummary=orchestration.decision_summary,
+        decisionDiagnostics=orchestration.decision_diagnostics,
+        evidenceDiagnostics=orchestration.evidence_diagnostics,
         evidenceStats=orchestration.evidence_stats,
         coverageAudit=orchestration.coverage_audit,
         trace=orchestration.trace,
@@ -855,6 +864,10 @@ async def resume_run(
             coverage_confidence=orchestration.coverage_confidence,
             checkout_readiness=orchestration.checkout_readiness,
             source_health=orchestration.source_health,
+            decision_summary=orchestration.decision_summary,
+            score_breakdown=orchestration.score_breakdown,
+            decision_diagnostics=orchestration.decision_diagnostics,
+            evidence_diagnostics=orchestration.evidence_diagnostics,
         ),
     )
     await services.session_service.save_state(session_id, orchestration.state)
@@ -865,6 +878,10 @@ async def resume_run(
         reply=orchestration.reply,
         decision=orchestration.decision,
         scientificScore=orchestration.scientific_score,
+        scoreBreakdown=orchestration.score_breakdown,
+        decisionSummary=orchestration.decision_summary,
+        decisionDiagnostics=orchestration.decision_diagnostics,
+        evidenceDiagnostics=orchestration.evidence_diagnostics,
         evidenceStats=orchestration.evidence_stats,
         coverageAudit=orchestration.coverage_audit,
         trace=orchestration.trace,
@@ -972,6 +989,10 @@ async def get_recommendation(
         reply=str(checkpoint.get("reply") or ""),
         decision=decision.get("decision"),
         scientificScore=decision.get("scientificScore", {}),
+        scoreBreakdown=decision.get("scoreBreakdown", {}),
+        decisionSummary=decision.get("decisionSummary", ""),
+        decisionDiagnostics=decision.get("decisionDiagnostics", {}),
+        evidenceDiagnostics=decision.get("evidenceDiagnostics", {}),
         evidenceStats=decision.get("evidenceStats", {}),
         coverageAudit=decision.get("coverageAudit", {}),
         trace=decision.get("trace", []),

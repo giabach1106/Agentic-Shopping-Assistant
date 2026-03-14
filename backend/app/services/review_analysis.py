@@ -34,8 +34,14 @@ _STOPWORDS = {
 class RankedEvidence:
     doc_id: str
     source: str
+    kind: str
     quality_score: float
     promo_signals: int
+    relevance_score: float
+    sentiment: int
+    product_match: float
+    positive_signals: list[str]
+    negative_signals: list[str]
     excerpt: str
 
 
@@ -72,6 +78,28 @@ class ReviewEvidenceAnalyzer:
         "paid promotion",
         "#ad",
         "commission",
+    )
+    _positive_patterns = (
+        "comfortable",
+        "sturdy",
+        "easy",
+        "support",
+        "value",
+        "mixes",
+        "taste",
+        "clean",
+        "fast",
+    )
+    _negative_patterns = (
+        "wobble",
+        "late",
+        "clump",
+        "fake",
+        "damaged",
+        "hard",
+        "weak",
+        "sweet",
+        "noisy",
     )
 
     def analyze(self, documents: list[RetrievalDocument]) -> ReviewAnalysisResult:
@@ -153,10 +181,25 @@ class ReviewEvidenceAnalyzer:
         lowered = document.content.lower()
         source_weight = self._source_weights.get(document.source.lower(), 0.7)
         length_factor = min(1.0, max(0.35, len(document.content) / 220))
+        relevance = max(0.0, min(1.0, float(document.metadata.get("relevanceScore") or 0.0)))
+        product_match = max(0.0, min(1.0, float(document.metadata.get("productMatch") or relevance or 0.0)))
         promo_signals = sum(1 for marker in self._promo_patterns if marker in lowered)
         promo_penalty = min(0.28, promo_signals * 0.09)
+        positive_signals = [marker for marker in self._positive_patterns if marker in lowered][:4]
+        negative_signals = [marker for marker in self._negative_patterns if marker in lowered][:4]
+        sentiment = len(positive_signals) - len(negative_signals)
 
-        quality = max(0.0, min(1.0, (0.55 * source_weight) + (0.45 * length_factor) - promo_penalty))
+        quality = max(
+            0.0,
+            min(
+                1.0,
+                (0.35 * source_weight)
+                + (0.2 * length_factor)
+                + (0.25 * relevance)
+                + (0.2 * product_match)
+                - promo_penalty,
+            ),
+        )
         excerpt = document.content.strip()
         if len(excerpt) > 160:
             excerpt = f"{excerpt[:157]}..."
@@ -164,8 +207,14 @@ class ReviewEvidenceAnalyzer:
         return RankedEvidence(
             doc_id=document.doc_id,
             source=document.source,
+            kind=str(document.metadata.get("contentKind") or "review"),
             quality_score=round(quality, 2),
             promo_signals=promo_signals,
+            relevance_score=round(relevance, 2),
+            sentiment=sentiment,
+            product_match=round(product_match, 2),
+            positive_signals=positive_signals,
+            negative_signals=negative_signals,
             excerpt=excerpt,
         )
 

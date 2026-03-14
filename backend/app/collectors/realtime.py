@@ -16,6 +16,7 @@ import httpx
 from app.collectors.base import (
     CollectionResult,
     CollectorTraceEvent,
+    EvidenceRecordData,
     ProductCandidateData,
     RealtimeCollector,
     ReviewRecord,
@@ -119,6 +120,37 @@ def _is_relevant_product_text(text: str, query: str) -> bool:
     return title_matches_constraints(text, {"category": query})
 
 
+def _is_first_hand_reddit_review_text(title: str, body: str) -> bool:
+    text = _normalize_text(f"{title} {body}".lower())
+    if not text or len(text.split()) < 10:
+        return False
+    if any(text.startswith(prefix) for prefix in ("what ", "why ", "how ", "should i", "anyone ", "aitah", "help ")):
+        return False
+    if text.count("?") >= 2:
+        return False
+    return any(
+        marker in f" {text} "
+        for marker in (
+            " i ",
+            " my ",
+            " we ",
+            " i've ",
+            " i bought ",
+            " i got ",
+            " i received ",
+            " after ",
+            " weeks in",
+            " month in",
+            " setup",
+            " arrived",
+            " using it",
+            " sitting in",
+            " mixes",
+            " tastes",
+        )
+    )
+
+
 def _extract_numeric_price(value: str) -> float | None:
     match = re.search(r"([0-9][0-9,]*(?:\.[0-9]{2})?)", value)
     if not match:
@@ -137,6 +169,10 @@ def _title_from_url_slug(value: str) -> str:
     cleaned = re.sub(r"\.(?:htm|html)$", "", slug, flags=re.IGNORECASE)
     cleaned = cleaned.replace("-", " ")
     return _normalize_text(cleaned)
+
+
+def _signature_from_title(value: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", value.lower())[:8]).strip()
 
 
 def _is_product_label_noise(value: str) -> bool:
@@ -334,6 +370,164 @@ def _first_image_url(value: Any) -> str | None:
             if isinstance(item, str) and item.startswith("http"):
                 return item
     return None
+
+
+def _extract_amazon_asin(value: str) -> str | None:
+    match = re.search(r"/dp/([A-Z0-9]{10})", value, re.IGNORECASE)
+    if match:
+        return match.group(1).upper()
+    return None
+
+
+def _extract_amazon_detail_title(body: str) -> str:
+    patterns = (
+        r'<span[^>]+id="productTitle"[^>]*>([\s\S]*?)</span>',
+        r'<meta[^>]+property="og:title"[^>]+content="([^"]{10,420})"',
+        r'"title"\s*:\s*"([^"]{10,420})"',
+    )
+    for pattern in patterns:
+        match = re.search(pattern, body, re.IGNORECASE)
+        if not match:
+            continue
+        candidate = _decode_html_text(match.group(1))
+        if candidate and not _is_product_label_noise(candidate):
+            return candidate
+    for payload in _extract_json_ld_payloads(body):
+        for product in _iter_json_ld_products(payload):
+            candidate = _decode_html_text(str(product.get("name") or ""))
+            if candidate and not _is_product_label_noise(candidate):
+                return candidate
+    return ""
+
+
+def _extract_amazon_detail_image_url(body: str) -> str | None:
+    patterns = (
+        r'"hiRes":"(https://[^"]+)"',
+        r'"large":"(https://[^"]+)"',
+        r'<img[^>]+id="landingImage"[^>]+src="(https://[^"]+)"',
+    )
+    for pattern in patterns:
+        match = re.search(pattern, body, re.IGNORECASE)
+        if match:
+            return match.group(1).replace("\\u002F", "/").replace("\\/", "/")
+    return _extract_amazon_image_url(body)
+
+
+def _extract_amazon_shipping_eta(body: str) -> str:
+    patterns = (
+        r'FREE delivery\s*([^<]{6,80})<',
+        r'Get it\s*([^<]{6,80})<',
+        r'Delivery\s*([^<]{6,80})<',
+    )
+    for pattern in patterns:
+        match = re.search(pattern, body, re.IGNORECASE)
+        if not match:
+            continue
+        candidate = _decode_html_text(match.group(1))
+        candidate = candidate.replace("Details", "").strip(" .,:;-")
+        if candidate and len(candidate) >= 3:
+            return candidate[:80]
+    return "unknown"
+
+
+def _extract_amazon_seller_info(body: str) -> str:
+    patterns = (
+        r'Ships from\s*</span>\s*<span[^>]*>([^<]{3,120})</span>[\s\S]{0,240}?Sold by\s*</span>\s*<span[^>]*>([^<]{3,120})</span>',
+        r'Sold by\s*</span>\s*<span[^>]*>([^<]{3,120})</span>',
+        r'"merchantName":"([^"]{3,120})"',
+    )
+    for pattern in patterns:
+        match = re.search(pattern, body, re.IGNORECASE)
+        if not match:
+            continue
+        if len(match.groups()) == 2:
+            ships_from = _decode_html_text(match.group(1))
+            sold_by = _decode_html_text(match.group(2))
+            return f"{ships_from} / {sold_by}"[:140]
+        return _decode_html_text(match.group(1))[:140]
+    return "Amazon marketplace"
+
+
+def _extract_amazon_spec_text(body: str) -> str:
+    snippets: list[str] = []
+    bullet_matches = re.findall(
+        r'<span[^>]+class="[^"]*a-list-item[^"]*"[^>]*>([\s\S]*?)</span>',
+        body,
+        re.IGNORECASE,
+    )
+    for raw in bullet_matches[:10]:
+        cleaned = _decode_html_text(raw)
+        if cleaned and len(cleaned) >= 12 and not _is_product_label_noise(cleaned):
+            snippets.append(cleaned)
+    dimension_matches = re.findall(
+        r'(?:Product Dimensions|Item Width|Top Width|Desktop Width)[\s\S]{0,120}?([0-9]{2,3}(?:\.[0-9]+)?\s*(?:inches|inch|"))',
+        body,
+        re.IGNORECASE,
+    )
+    for raw in dimension_matches[:3]:
+        cleaned = _decode_html_text(raw)
+        if cleaned:
+            snippets.append(cleaned)
+    deduped: list[str] = []
+    for item in snippets:
+        if item not in deduped:
+            deduped.append(item)
+    return " ".join(deduped[:6])[:720]
+
+
+def _extract_amazon_review_previews(body: str, *, url: str, now: str) -> list[ReviewRecord]:
+    starts = [match.start() for match in re.finditer(r'id="customer_review-[^"]+"', body, re.IGNORECASE)]
+    reviews: list[ReviewRecord] = []
+    if not starts:
+        return reviews
+    for idx, start in enumerate(starts[:6]):
+        end = starts[idx + 1] if idx + 1 < len(starts) else min(len(body), start + 12000)
+        block = body[start:end]
+        title_match = re.search(
+            r'data-hook="review-title"[^>]*>[\s\S]*?<span[^>]*>([\s\S]*?)</span>',
+            block,
+            re.IGNORECASE,
+        )
+        body_match = re.search(
+            r'data-hook="review-body"[^>]*>[\s\S]*?<span[^>]*>([\s\S]*?)</span>',
+            block,
+            re.IGNORECASE,
+        )
+        rating_match = re.search(
+            r'data-hook="review-star-rating"[^>]*>[\s\S]*?([0-5](?:\.[0-9])?)\s*out of 5 stars',
+            block,
+            re.IGNORECASE,
+        )
+        helpful_match = re.search(
+            r'([0-9][0-9,]*)\s+people found this helpful',
+            block,
+            re.IGNORECASE,
+        )
+        if not body_match:
+            continue
+        title = _decode_html_text(title_match.group(1)) if title_match else ""
+        review_body = _decode_html_text(body_match.group(1))
+        if not review_body or len(review_body.split()) < 6:
+            continue
+        review_text = f"{title}. {review_body}".strip(". ")
+        reviews.append(
+            ReviewRecord(
+                source="amazon",
+                url=url,
+                review_id=f"amz-pdp-rv-{uuid.uuid4().hex[:10]}",
+                rating=_safe_float(rating_match.group(1), 0.0) if rating_match else 0.0,
+                review_text=review_text[:600],
+                timestamp=now,
+                helpful_votes=_safe_int(helpful_match.group(1), 0) if helpful_match else 0,
+                verified_purchase="verified purchase" in block.lower(),
+                media_count=1 if "video-thumbnail-container" in block.lower() or "cr-media-rich" in block.lower() else 0,
+                retrieved_at=now,
+                evidence_id=f"amz-pdp-ev-{uuid.uuid4().hex[:10]}",
+                confidence_source=0.88,
+                raw_snapshot_ref=url,
+            )
+        )
+    return reviews
 
 
 class DevRealtimeCollector:
@@ -928,26 +1122,108 @@ class LiveRealtimeCollector:
     def _build_source_health(self, result: CollectionResult) -> dict[str, Any]:
         source_health: dict[str, Any] = {}
         for event in result.trace:
-            entry = source_health.setdefault(
-                event.source,
-                {
-                    "source": event.source,
-                    "status": event.status,
-                    "step": event.step,
-                    "detail": event.detail,
-                    "fallbackUsed": False,
-                },
-            )
-            entry["status"] = event.status
-            entry["step"] = event.step
-            entry["detail"] = event.detail
-            if "browser fallback" in event.detail.lower():
-                entry["fallbackUsed"] = True
+            keys = [event.source]
+            if event.source == "amazon" and event.step == "collect_products":
+                keys.append("amazonSearch")
+            elif event.source == "amazon" and event.step == "collect_pdp":
+                keys.append("amazonPdp")
+            for key in keys:
+                entry = source_health.setdefault(
+                    key,
+                    {
+                        "source": key,
+                        "status": event.status,
+                        "step": event.step,
+                        "detail": event.detail,
+                        "fallbackUsed": False,
+                    },
+                )
+                entry["status"] = event.status
+                entry["step"] = event.step
+                entry["detail"] = event.detail
+                if "browser fallback" in event.detail.lower():
+                    entry["fallbackUsed"] = True
         for source in result.blocked_sources:
             entry = source_health.setdefault(source, {"source": source})
             entry.setdefault("status", "blocked")
             entry.setdefault("fallbackUsed", False)
         return source_health
+
+    async def _enrich_amazon_pdp(
+        self,
+        candidate: ProductCandidateData,
+        result: CollectionResult,
+    ) -> tuple[str, bool]:
+        try:
+            response = await self._client.get(candidate.url)
+            body = response.text
+            challenge_marker = _detect_marketplace_challenge("amazon", body)
+            fallback_used = False
+            if challenge_marker:
+                fallback_body = await self._maybe_browser_fallback(
+                    source="amazon",
+                    url=candidate.url,
+                    body=body,
+                    reason="challenge",
+                )
+                if fallback_body:
+                    body = fallback_body
+                    fallback_used = True
+                    challenge_marker = _detect_marketplace_challenge("amazon", body)
+                if challenge_marker:
+                    return "blocked", fallback_used
+
+            detail_title = _extract_amazon_detail_title(body)
+            detail_price = _extract_amazon_price(body, candidate.price)
+            detail_rating, detail_rating_count = _extract_rating_and_count(body)
+            detail_image = _extract_amazon_detail_image_url(body)
+            seller_info = _extract_amazon_seller_info(body)
+            shipping_eta = _extract_amazon_shipping_eta(body)
+            spec_text = _extract_amazon_spec_text(body)
+            review_previews = _extract_amazon_review_previews(
+                body,
+                url=candidate.url,
+                now=_now_iso(),
+            )
+
+            if detail_title:
+                candidate.title = detail_title[:320]
+            if detail_price > 0:
+                candidate.price = detail_price
+            if detail_rating > 0:
+                candidate.avg_rating = detail_rating
+            if detail_rating_count > 0:
+                candidate.rating_count = detail_rating_count
+            if detail_image:
+                candidate.image_url = detail_image
+            if seller_info:
+                candidate.seller_info = seller_info
+            if shipping_eta and shipping_eta != "unknown":
+                candidate.shipping_eta = shipping_eta
+            if spec_text:
+                candidate.spec_text = spec_text
+
+            existing_review_signatures = {
+                f"{item.url}::{item.review_text[:120]}"
+                for item in result.reviews
+                if item.source == "amazon"
+            }
+            added_reviews = 0
+            for review in review_previews:
+                signature = f"{review.url}::{review.review_text[:120]}"
+                if signature in existing_review_signatures:
+                    continue
+                result.reviews.append(review)
+                existing_review_signatures.add(signature)
+                added_reviews += 1
+
+            if detail_title or detail_rating_count > 0 or spec_text or added_reviews > 0:
+                if detail_rating_count > 0 or added_reviews > 0:
+                    return "ok", fallback_used
+                return "partial", fallback_used
+            return "parser_failed", fallback_used
+        except Exception:  # noqa: BLE001
+            return "parser_failed", False
 
     async def _browser_fetch(self, url: str) -> str | None:
         try:
@@ -1066,6 +1342,7 @@ class LiveRealtimeCollector:
                         confidence_source=0.66,
                         raw_snapshot_ref=url,
                         image_url=image_url,
+                        spec_text=None,
                     )
                 )
                 if image_url:
@@ -1108,6 +1385,33 @@ class LiveRealtimeCollector:
                     duration_ms=int((time.perf_counter() - started) * 1000),
                 )
             )
+            pdp_started = time.perf_counter()
+            amazon_candidates = [item for item in result.products if item.source == source][:6]
+            if amazon_candidates:
+                enrichment_results = await asyncio.gather(
+                    *(self._enrich_amazon_pdp(item, result) for item in amazon_candidates)
+                )
+                ok_count = sum(1 for status, _ in enrichment_results if status == "ok")
+                partial_count = sum(1 for status, _ in enrichment_results if status == "partial")
+                blocked_count = sum(1 for status, _ in enrichment_results if status == "blocked")
+                parser_failed_count = sum(1 for status, _ in enrichment_results if status == "parser_failed")
+                fallback_used = any(fallback for _, fallback in enrichment_results)
+                pdp_status = "ok" if ok_count > 0 else ("warning" if partial_count > 0 else "blocked")
+                pdp_detail = (
+                    f"Amazon PDP enriched {ok_count} candidates, partial={partial_count}, "
+                    f"parser_failed={parser_failed_count}, blocked={blocked_count}."
+                )
+                if fallback_used:
+                    pdp_detail = f"{pdp_detail} Browser fallback used on at least one PDP."
+                result.trace.append(
+                    CollectorTraceEvent(
+                        source=source,
+                        step="collect_pdp",
+                        status=pdp_status,
+                        detail=pdp_detail,
+                        duration_ms=int((time.perf_counter() - pdp_started) * 1000),
+                    )
+                )
         except Exception as exc:  # noqa: BLE001
             result.missing_evidence.append("amazon.product_list")
             result.blocked_sources.append(source)
@@ -1146,6 +1450,8 @@ class LiveRealtimeCollector:
                     continue
                 text = (title + " " + body).strip()
                 if not _is_relevant_product_text(text, query):
+                    continue
+                if not _is_first_hand_reddit_review_text(title, body):
                     continue
                 result.reviews.append(
                     ReviewRecord(
@@ -1774,19 +2080,25 @@ class LiveRealtimeCollector:
                             image_url=image_url,
                         )
                     )
-                    result.reviews.append(
-                        ReviewRecord(
+                    result.evidence_records.append(
+                        EvidenceRecordData(
                             source=source,
+                            source_bucket="commerce",
+                            content_kind="listing_summary",
+                            domain="supplement",
                             url=item_url,
-                            review_id=f"nf-rv-{uuid.uuid4().hex[:10]}",
-                            rating=rating_value if rating_value > 0 else 4.0,
-                            review_text=review_text,
-                            timestamp=now,
-                            helpful_votes=rating_count_value,
-                            verified_purchase=None,
-                            media_count=1 if image_url else 0,
-                            retrieved_at=now,
                             evidence_id=f"nf-ev-{uuid.uuid4().hex[:10]}",
+                            product_signature=_signature_from_title(title),
+                            product_title=title[:280],
+                            review_like=False,
+                            accepted_in_review_corpus=False,
+                            relevance_score=0.84,
+                            rejection_reasons=["listing_summary_not_review"],
+                            extraction_method="json_ld_product_description",
+                            clean_excerpt=review_text,
+                            rating=rating_value if rating_value > 0 else None,
+                            helpful_votes=rating_count_value,
+                            retrieved_at=now,
                             confidence_source=0.68,
                             raw_snapshot_ref=url,
                         )
@@ -1948,19 +2260,25 @@ class LiveRealtimeCollector:
                             image_url=image_url,
                         )
                     )
-                    result.reviews.append(
-                        ReviewRecord(
+                    result.evidence_records.append(
+                        EvidenceRecordData(
                             source=source,
+                            source_bucket="commerce",
+                            content_kind="listing_summary",
+                            domain="supplement",
                             url=item_url,
-                            review_id=f"dps-rv-{uuid.uuid4().hex[:10]}",
-                            rating=rating_value if rating_value > 0 else 4.0,
-                            review_text=review_text,
-                            timestamp=now,
-                            helpful_votes=rating_count_value,
-                            verified_purchase=None,
-                            media_count=1 if image_url else 0,
-                            retrieved_at=now,
                             evidence_id=f"dps-ev-{uuid.uuid4().hex[:10]}",
+                            product_signature=_signature_from_title(title),
+                            product_title=title[:280],
+                            review_like=False,
+                            accepted_in_review_corpus=False,
+                            relevance_score=0.82,
+                            rejection_reasons=["listing_summary_not_review"],
+                            extraction_method="json_ld_product_description",
+                            clean_excerpt=review_text,
+                            rating=rating_value if rating_value > 0 else None,
+                            helpful_votes=rating_count_value,
+                            retrieved_at=now,
                             confidence_source=0.63,
                             raw_snapshot_ref=url,
                         )
@@ -2026,40 +2344,9 @@ class LiveRealtimeCollector:
             body = response.text
 
             title_match = re.search(r"<title>([^<]{8,180})</title>", body, re.IGNORECASE)
-            now = _now_iso()
             if title_match:
-                title = title_match.group(1).strip()
-                result.reviews.append(
-                    ReviewRecord(
-                        source=source,
-                        url=url,
-                        review_id=f"tt-rv-{uuid.uuid4().hex[:10]}",
-                        rating=3.5,
-                        review_text=title,
-                        timestamp=now,
-                        helpful_votes=0,
-                        verified_purchase=None,
-                        media_count=1,
-                        retrieved_at=now,
-                        evidence_id=f"tt-ev-{uuid.uuid4().hex[:10]}",
-                        confidence_source=0.52,
-                        raw_snapshot_ref=url,
-                    )
-                )
-                result.visuals.append(
-                    VisualRecord(
-                        source=source,
-                        url=url,
-                        image_url="https://www.tiktok.com/favicon.ico",
-                        caption=title,
-                        retrieved_at=now,
-                        evidence_id=f"tt-img-{uuid.uuid4().hex[:10]}",
-                        confidence_source=0.48,
-                        raw_snapshot_ref=url,
-                    )
-                )
-                status = "ok"
-                detail = "Collected live TikTok tag metadata."
+                status = "warning"
+                detail = "Skipped TikTok tag page because it is not product-review evidence."
             else:
                 result.missing_evidence.append("tiktok.reviews")
                 result.blocked_sources.append(source)

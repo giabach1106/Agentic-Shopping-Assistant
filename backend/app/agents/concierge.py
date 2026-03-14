@@ -126,7 +126,7 @@ class ConciergeAgent:
                 support_level=support_level,
             )
 
-        if _AUTOFILL_PATTERN.search(message):
+        if _AUTOFILL_PATTERN.search(message) and not is_shopping_message(message):
             return self._ask_for_confirmation(
                 action_type="enable_autofill",
                 prompt=(

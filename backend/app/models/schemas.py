@@ -43,6 +43,10 @@ class ChatResponse(BaseModel):
     reply: str
     decision: dict[str, Any] | None = None
     scientific_score: dict[str, Any] = Field(alias="scientificScore")
+    score_breakdown: dict[str, Any] = Field(default_factory=dict, alias="scoreBreakdown")
+    decision_summary: str = Field(default="", alias="decisionSummary")
+    decision_diagnostics: dict[str, Any] = Field(default_factory=dict, alias="decisionDiagnostics")
+    evidence_diagnostics: dict[str, Any] = Field(default_factory=dict, alias="evidenceDiagnostics")
     evidence_stats: dict[str, Any] = Field(alias="evidenceStats")
     coverage_audit: dict[str, Any] = Field(alias="coverageAudit")
     trace: list[dict[str, Any]]
@@ -138,7 +142,10 @@ class RatingCoverageResponse(BaseModel):
 class EvidenceRowResponse(BaseModel):
     doc_id: str = Field(alias="docId")
     source: str
+    kind: str = "review"
     quality_score: int = Field(alias="qualityScore")
+    relevance_score: int = Field(alias="relevanceScore")
+    product_match: int = Field(alias="productMatch")
     promo_signals: list[str] = Field(alias="promoSignals")
     excerpt: str
     positive_signals: list[str] = Field(alias="positiveSignals")
@@ -185,6 +192,10 @@ class SessionProductResponse(BaseModel):
     ingredient_analysis: IngredientAnalysisResponse = Field(alias="ingredientAnalysis")
     product_insight: ProductInsightResponse = Field(alias="productInsight")
     scientific_score: dict[str, Any] = Field(alias="scientificScore")
+    score_breakdown: dict[str, Any] = Field(default_factory=dict, alias="scoreBreakdown")
+    decision_summary: str = Field(default="", alias="decisionSummary")
+    decision_diagnostics: dict[str, Any] = Field(default_factory=dict, alias="decisionDiagnostics")
+    evidence_diagnostics: dict[str, Any] = Field(default_factory=dict, alias="evidenceDiagnostics")
     evidence_stats: dict[str, Any] = Field(alias="evidenceStats")
     trace: list[dict[str, Any]]
 
@@ -200,6 +211,10 @@ class RecommendationResponse(BaseModel):
     reply: str
     decision: dict[str, Any] | None
     scientific_score: dict[str, Any] = Field(alias="scientificScore")
+    score_breakdown: dict[str, Any] = Field(default_factory=dict, alias="scoreBreakdown")
+    decision_summary: str = Field(default="", alias="decisionSummary")
+    decision_diagnostics: dict[str, Any] = Field(default_factory=dict, alias="decisionDiagnostics")
+    evidence_diagnostics: dict[str, Any] = Field(default_factory=dict, alias="evidenceDiagnostics")
     evidence_stats: dict[str, Any] = Field(alias="evidenceStats")
     coverage_audit: dict[str, Any] = Field(alias="coverageAudit")
     trace: list[dict[str, Any]]

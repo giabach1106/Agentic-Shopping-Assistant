@@ -33,3 +33,7 @@ class ShoppingState(TypedDict):
     crawl_meta: dict[str, Any]
     coverage_confidence: str
     checkout_readiness: str
+    score_breakdown: dict[str, Any]
+    decision_summary: str
+    decision_diagnostics: dict[str, Any]
+    evidence_diagnostics: dict[str, Any]

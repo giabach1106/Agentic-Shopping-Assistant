@@ -178,6 +178,61 @@ def test_trust_scoring_prefers_wait_when_shortlist_exists_but_rating_coverage_is
     assert result.decision.verdict == "WAIT"
 
 
+def test_trust_scoring_marks_unknown_promo_without_forcing_100_percent() -> None:
+    engine = TrustScoringEngine(_settings())
+    result = engine.evaluate(
+        agent_outputs={
+            "collect": {
+                "sourceCoverage": 2,
+                "commerceSourceCoverage": 1,
+                "blockedCommerceSources": ["walmart"],
+            },
+            "review": {
+                "confidence": 0.28,
+                "paidPromoLikelihood": None,
+                "promoLikelihoodStatus": "unknown",
+                "evidenceQualityScore": 0.22,
+                "duplicateReviewClusters": [],
+                "riskFlags": [],
+                "reviewCount": 0,
+                "ratingSummary": {
+                    "avgRating": 4.6,
+                    "ratingCount": 754,
+                    "positiveCount": 650,
+                },
+                "evidenceDiagnostics": {
+                    "acceptedReviewCount": 0,
+                    "acceptedReviewSources": {},
+                    "rejectionReasons": {"off_topic": 2},
+                },
+            },
+            "visual": {
+                "status": "OK",
+                "authenticityScore": 82,
+                "confidence": 0.74,
+                "mismatchFlags": [],
+                "visualRisks": [],
+            },
+            "price": {
+                "candidates": [
+                    {
+                        "title": "Executive Standing Desk 60 inch",
+                        "sourceUrl": "https://www.amazon.com/dp/B0DESK5555",
+                        "price": 289.99,
+                    }
+                ],
+                "blockers": [],
+            },
+        },
+        constraints={"category": "standing desk", "widthMinInches": 55},
+    )
+    assert result.status == "OK"
+    assert result.coverage_confidence == "limited"
+    assert result.evidence_stats["promoLikelihoodStatus"] == "unknown"
+    assert result.decision_summary
+    assert "trust" not in result.decision_summary.lower()
+
+
 def test_trust_scoring_penalizes_missing_visual_evidence() -> None:
     engine = TrustScoringEngine(_settings())
     result = engine.evaluate(

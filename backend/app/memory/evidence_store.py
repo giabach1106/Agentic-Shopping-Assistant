@@ -10,6 +10,8 @@ from urllib.parse import urlparse
 
 import aiosqlite
 
+from app.orchestrator.domain_support import infer_domain, normalize_lookup
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -69,6 +71,34 @@ class SQLiteEvidenceStore:
                     image_url TEXT,
                     ingredient_text TEXT,
                     review_snippets_json TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    retrieved_at TEXT NOT NULL
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS evidence_records (
+                    fingerprint TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    source_bucket TEXT NOT NULL,
+                    content_kind TEXT NOT NULL,
+                    domain TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    product_signature TEXT,
+                    product_title TEXT,
+                    review_like INTEGER NOT NULL,
+                    accepted_in_review_corpus INTEGER NOT NULL,
+                    relevance_score REAL NOT NULL,
+                    rejection_reasons_json TEXT NOT NULL,
+                    extraction_method TEXT NOT NULL,
+                    clean_excerpt TEXT NOT NULL,
+                    rating REAL,
+                    helpful_votes INTEGER NOT NULL,
+                    confidence_source REAL NOT NULL,
+                    raw_snapshot_ref TEXT NOT NULL,
                     payload_json TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -239,6 +269,132 @@ class SQLiteEvidenceStore:
             await db.commit()
         return inserted
 
+    async def upsert_evidence_records(self, records: list[dict[str, Any]]) -> int:
+        if not records:
+            return 0
+        now = _now_iso()
+        inserted = 0
+        async with aiosqlite.connect(self._db_path) as db:
+            for item in records:
+                if not isinstance(item, dict):
+                    continue
+                source = str(item.get("source") or "unknown").strip().lower()
+                source_bucket = str(item.get("sourceBucket") or "").strip().lower()
+                content_kind = str(item.get("contentKind") or "").strip().lower()
+                domain = str(item.get("domain") or "").strip().lower() or "generic"
+                url = _normalize_url(str(item.get("url") or "").strip())
+                clean_excerpt = str(item.get("cleanExcerpt") or "").strip()
+                evidence_id = str(item.get("evidenceId") or "").strip()
+                if not source or not source_bucket or not content_kind or not clean_excerpt:
+                    continue
+                fingerprint = evidence_id or hashlib.sha1(
+                    json.dumps(
+                        {
+                            "source": source,
+                            "bucket": source_bucket,
+                            "kind": content_kind,
+                            "domain": domain,
+                            "url": url,
+                            "excerpt": clean_excerpt,
+                        },
+                        sort_keys=True,
+                    ).encode("utf-8")
+                ).hexdigest()
+                payload = dict(item)
+                product_signature = str(item.get("productSignature") or "").strip()
+                product_title = str(item.get("productTitle") or "").strip()
+                review_like = 1 if bool(item.get("reviewLike")) else 0
+                accepted_in_review_corpus = 1 if bool(item.get("acceptedInReviewCorpus")) else 0
+                relevance_score = float(item.get("relevanceScore") or 0.0)
+                rejection_reasons = [
+                    str(reason).strip()
+                    for reason in (item.get("rejectionReasons") or [])
+                    if str(reason).strip()
+                ]
+                extraction_method = str(item.get("extractionMethod") or "unknown").strip()
+                rating = item.get("rating")
+                helpful_votes = int(item.get("helpfulVotes") or 0)
+                confidence_source = float(item.get("confidenceSource") or 0.0)
+                raw_snapshot_ref = str(item.get("rawSnapshotRef") or "").strip()
+                retrieved_at = str(item.get("retrievedAt") or item.get("retrieved_at") or now).strip() or now
+                await db.execute(
+                    """
+                    INSERT INTO evidence_records (
+                        fingerprint,
+                        source,
+                        source_bucket,
+                        content_kind,
+                        domain,
+                        url,
+                        product_signature,
+                        product_title,
+                        review_like,
+                        accepted_in_review_corpus,
+                        relevance_score,
+                        rejection_reasons_json,
+                        extraction_method,
+                        clean_excerpt,
+                        rating,
+                        helpful_votes,
+                        confidence_source,
+                        raw_snapshot_ref,
+                        payload_json,
+                        created_at,
+                        updated_at,
+                        retrieved_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(fingerprint) DO UPDATE SET
+                        source = excluded.source,
+                        source_bucket = excluded.source_bucket,
+                        content_kind = excluded.content_kind,
+                        domain = excluded.domain,
+                        url = excluded.url,
+                        product_signature = excluded.product_signature,
+                        product_title = excluded.product_title,
+                        review_like = excluded.review_like,
+                        accepted_in_review_corpus = excluded.accepted_in_review_corpus,
+                        relevance_score = excluded.relevance_score,
+                        rejection_reasons_json = excluded.rejection_reasons_json,
+                        extraction_method = excluded.extraction_method,
+                        clean_excerpt = excluded.clean_excerpt,
+                        rating = excluded.rating,
+                        helpful_votes = excluded.helpful_votes,
+                        confidence_source = excluded.confidence_source,
+                        raw_snapshot_ref = excluded.raw_snapshot_ref,
+                        payload_json = excluded.payload_json,
+                        updated_at = excluded.updated_at,
+                        retrieved_at = excluded.retrieved_at
+                    """,
+                    (
+                        fingerprint,
+                        source,
+                        source_bucket,
+                        content_kind,
+                        domain,
+                        url,
+                        product_signature,
+                        product_title,
+                        review_like,
+                        accepted_in_review_corpus,
+                        relevance_score,
+                        json.dumps(rejection_reasons, sort_keys=True),
+                        extraction_method,
+                        clean_excerpt,
+                        float(rating) if rating is not None else None,
+                        helpful_votes,
+                        confidence_source,
+                        raw_snapshot_ref,
+                        json.dumps(payload, sort_keys=True),
+                        now,
+                        now,
+                        retrieved_at,
+                    ),
+                )
+                inserted += 1
+            await db.commit()
+        return inserted
+
     async def list_catalog_records(
         self,
         *,
@@ -337,6 +493,112 @@ class SQLiteEvidenceStore:
                     "ingredient_text": row["ingredient_text"],
                     "review_snippets": snippets,
                     "retrieved_at": row["retrieved_at"],
+                    "payload": payload,
+                }
+            )
+        return items
+
+    async def list_evidence_records(
+        self,
+        *,
+        domain: str,
+        query: str | None = None,
+        limit: int = 120,
+        accepted_only: bool = False,
+    ) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(limit, 500))
+        params: list[Any] = [domain.strip().lower() or "generic"]
+        clauses = ["domain = ?"]
+        if accepted_only:
+            clauses.append("accepted_in_review_corpus = 1")
+        if query and query.strip():
+            query_terms = [
+                term
+                for term in re.findall(r"[a-z0-9]+", normalize_lookup(query))
+                if len(term) >= 3
+            ][:8]
+            if query_terms:
+                subclauses: list[str] = []
+                for term in query_terms:
+                    like = f"%{term}%"
+                    subclauses.append(
+                        "(lower(clean_excerpt) LIKE ? OR lower(COALESCE(product_title,'')) LIKE ? OR lower(COALESCE(product_signature,'')) LIKE ?)"
+                    )
+                    params.extend([like, like, like])
+                clauses.append("(" + " OR ".join(subclauses) + ")")
+        sql = f"""
+            SELECT
+                fingerprint,
+                source,
+                source_bucket,
+                content_kind,
+                domain,
+                url,
+                product_signature,
+                product_title,
+                review_like,
+                accepted_in_review_corpus,
+                relevance_score,
+                rejection_reasons_json,
+                extraction_method,
+                clean_excerpt,
+                rating,
+                helpful_votes,
+                confidence_source,
+                raw_snapshot_ref,
+                payload_json,
+                retrieved_at
+            FROM evidence_records
+            WHERE {" AND ".join(clauses)}
+            ORDER BY accepted_in_review_corpus DESC, relevance_score DESC, helpful_votes DESC, retrieved_at DESC
+            LIMIT ?
+        """
+        params.append(safe_limit)
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(sql, params)
+            rows = await cursor.fetchall()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            payload: dict[str, Any] = {}
+            raw_payload = row["payload_json"]
+            if isinstance(raw_payload, str) and raw_payload:
+                try:
+                    loaded_payload = json.loads(raw_payload)
+                except json.JSONDecodeError:
+                    loaded_payload = {}
+                if isinstance(loaded_payload, dict):
+                    payload = loaded_payload
+            raw_reasons = row["rejection_reasons_json"]
+            reasons: list[str] = []
+            if isinstance(raw_reasons, str) and raw_reasons:
+                try:
+                    loaded_reasons = json.loads(raw_reasons)
+                except json.JSONDecodeError:
+                    loaded_reasons = []
+                if isinstance(loaded_reasons, list):
+                    reasons = [str(item).strip() for item in loaded_reasons if str(item).strip()]
+            items.append(
+                {
+                    "evidenceId": row["fingerprint"],
+                    "source": row["source"],
+                    "sourceBucket": row["source_bucket"],
+                    "contentKind": row["content_kind"],
+                    "domain": row["domain"],
+                    "url": row["url"],
+                    "productSignature": row["product_signature"],
+                    "productTitle": row["product_title"],
+                    "reviewLike": bool(row["review_like"]),
+                    "acceptedInReviewCorpus": bool(row["accepted_in_review_corpus"]),
+                    "relevanceScore": float(row["relevance_score"]),
+                    "rejectionReasons": reasons,
+                    "extractionMethod": row["extraction_method"],
+                    "cleanExcerpt": row["clean_excerpt"],
+                    "rating": row["rating"],
+                    "helpfulVotes": int(row["helpful_votes"] or 0),
+                    "confidenceSource": float(row["confidence_source"] or 0.0),
+                    "rawSnapshotRef": row["raw_snapshot_ref"],
+                    "retrievedAt": row["retrieved_at"],
                     "payload": payload,
                 }
             )

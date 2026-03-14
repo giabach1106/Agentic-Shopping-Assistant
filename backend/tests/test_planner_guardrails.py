@@ -227,3 +227,30 @@ def test_planner_treats_clean_ingredients_as_preference_not_category() -> None:
         assert "clean ingredients" in result["constraints"]["mustHave"]
 
     asyncio.run(run_test())
+
+
+def test_planner_extracts_width_constraints_from_follow_up() -> None:
+    async def run_test() -> None:
+        router = ModelRouter(_settings())
+        planner = PlannerAgent(router)
+        existing = {
+            "category": "standing desk",
+            "budgetMax": None,
+            "minRating": None,
+            "deliveryDeadline": None,
+            "mustHave": [],
+            "niceToHave": [],
+            "exclude": [],
+        }
+        result = await planner.run(
+            message="above 55 inches wide",
+            history=[],
+            existing_constraints=existing,
+            follow_up_count=0,
+            clarification_asked_count=1,
+        )
+        assert result["constraints"]["category"] == "standing desk"
+        assert result["constraints"]["widthMinInches"] == 55
+        assert result["needsFollowUp"] is False
+
+    asyncio.run(run_test())
