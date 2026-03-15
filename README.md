@@ -1,6 +1,6 @@
 # AgentCart
 
-![screenshot](assets/readme/architect.png)
+![screenshot](assets/readme/C.png)
 
 ## Quick Links
 
