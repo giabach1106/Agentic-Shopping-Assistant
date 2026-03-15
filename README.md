@@ -21,7 +21,7 @@
 
 ## Why We Built AgentCart
 
-Our team is made up of students. When we started getting ready for dorm life, we kept hitting the same problem: buying simple things was not simple at all. We had to compare chairs, desks, supplements, and other essentials across too many tabs:
+Our team is made up of students, that's why when we started getting ready for dorm life, we kept hitting the same problem: buying simple things was not simple at all. We had to compare chairs, desks, supplements, and other essentials across too many tabs:
 - one page for price
 - one page for shipping
 - one page for Reddit opinions
@@ -32,51 +32,23 @@ The hard part was not only finding products. The hard part was knowing what to t
 
 ## Why Amazon Nova
 
-We came up with AgentCart with help from Amazon Nova on the reasoning side. Nova was a good fit for this project because it helped us move fast without making the system feel too heavy:
-- fast enough for back-and-forth shopping sessions
-- good at short reasoning tasks
-- good at pulling structure out of messy user text
-- easy to plug into an agent workflow
+We came up with AgentCart with help from Amazon Nova on the reasoning side. Nova was a good fit for this project because it helped us move fast without making the system feel too heavy: it’s fast enough for back-and-forth shopping sessions, good at short reasoning tasks, strong at pulling structure out of messy user text, and easy to plug into an agent workflow.
 
 ## Why We Added RAG
 
-We did not want AgentCart to be just prompt engineering. Reviews are messy and spread across many places, so RAG helps us:
-- pull back relevant review context
-- keep explanations grounded
-- give the review agent better context
-- reuse information across turns
+We did not want AgentCart to be just prompt engineering. Reviews are messy and spread across many places, so RAG helps us pull back relevant review context, keep explanations grounded, give the review agent better context, and reuse information across turns.
 
 ## Scoring System (TrustScoringEngine) & Product Assembly
 
-We did not want the final score to come from a model's mood. The core logic lives in code, and the goal is simple: rank products fairly even when review counts are very different across items and across sources.
-
-We needed a way to handle cases like:
+We did not want the final score to come from a model's mood. The core logic lives in code, and the goal is simple: rank products fairly even when review counts are very different across items and across sources. Thefore, we needed a way to handle cases like:
 - Product A: 5.0 stars, 2 reviews
 - Product B: 4.6 stars, 500 reviews
 
-Why this matters:
+This matters because naïve averages break when sample sizes are very different, and LLM-only scoring can drift toward long or dramatic reviews. Using more conservative statistical methods helps protect against inflated ratings, while cross-source comparison requires one shared scoring logic.
 
-- Naive averages break when sample sizes are very different
-- LLM-only scoring can drift toward long or dramatic reviews
-- Conservative math gives better protection against inflated ratings
-- Cross-source comparison needs one shared scoring logic
+To address this, the scoring engine combines several safeguards: a Bayesian average, a Wilson lower bound, penalties for duplicate reviews and promotional or affiliate-heavy content, evidence coverage gates, and crawl health checks. On top of the statistical core, the system also applies supplement-specific ingredient heuristics.
 
-What the engine does now:
-
-- Bayesian average
-- Wilson lower bound
-- Duplicate review penalties
-- Promo or affiliate penalties
-- Evidence coverage gates
-- Crawl health checks
-- Supplement ingredient heuristics on top of the statistical core
-
-Product assembly in the API layer:
-
-- Merge matching offers into one product card
-- Keep multiple offers under one canonical product
-- Prefer Amazon as the primary offer when available
-- Build pros, cons, and insight cards from normalized evidence
+In the API layer, products are assembled by merging matching offers into a single product card, keeping multiple offers under one canonical product, preferring Amazon as the primary offer when available, and generating pros, cons, and insight cards from normalized review evidence.
 
 Research notes behind the statistical core:
 
@@ -96,7 +68,7 @@ Research notes behind the statistical core:
 
 ## What AgentCart Does Today
 
-- Live analysis for `supplement`, `chair`, and `desk`
+- Live analysis
 - Discovery-only mode for unsupported categories
 - Session memory across turns
 - Explainable verdicts and score breakdowns
